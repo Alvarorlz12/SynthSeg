@@ -31,3 +31,16 @@ SynthSeg/qc.py
 SynthSeg/training_heart.py
 SynthSeg/training_vae.py
 SynthSeg/validate_vae.py
+
+# Training outputs
+outputs_tutorial_*/
+scripts/tutorials/outputs_tutorial_*/
+**/logs/
+*.h5
+*.hdf5
+
+# Local tooling / editor / OS (Windows + Aramis Mac)
+.codegraph/
+.DS_Store
+.ipynb_checkpoints/
+.vscode/
