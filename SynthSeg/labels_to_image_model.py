@@ -26,6 +26,25 @@ from ext.lab2im import layers
 from ext.lab2im import edit_tensors as l2i_et
 from ext.lab2im.edit_volumes import get_ras_axes
 
+def _masked_std(args):
+    """std of B(x) over non-background voxels. Returns [batch, 1]"""
+    field, labels = args
+    mask = tf.cast(tf.not_equal(labels, 0), field.dtype)
+    axes = [1, 2, 3]
+    n = tf.reduce_sum(mask, axis=axes) + 1e-8
+    mean = tf.reduce_sum(field * mask, axis=axes) / n
+    mean2 = tf.reduce_sum(tf.square(field) * mask, axis=axes) / n
+    return tf.sqrt(tf.maximum(mean2 - mean*mean, 0.0))  # [b, nchannels] to [b, 1]
+
+
+def _whole_std(field):
+    """std of B(x) over all voxels of the crop, no brain mask. Returns [batch, 1]. The mask-free severity,
+    which a QC head can reproduce at deployment without a segmentation, and which is defined even on a crop
+    that misses the brain (unlike _masked_std, whose empty-mask value is a degenerate 0)."""
+    axes = [1, 2, 3]
+    mean = tf.reduce_mean(field, axis=axes)
+    mean2 = tf.reduce_mean(tf.square(field), axis=axes)
+    return tf.sqrt(tf.maximum(mean2 - mean * mean, 0.0))
 
 def labels_to_image_model(labels_shape,
                           n_channels,
@@ -51,6 +70,9 @@ def labels_to_image_model(labels_shape,
                           thickness=None,
                           bias_field_std=.5,
                           bias_scale=.025,
+                          bias_prob=.95,
+                          bias_std_masked=True,
+                          return_bias_std=False,
                           return_gradients=False):
     """
     This function builds a keras/tensorflow model to generate images from provided label maps.
@@ -139,6 +161,16 @@ def labels_to_image_model(labels_shape,
     the normal distribution from which we sample the first tensor. Set to 0 to deactivate bias field corruption.
     :param bias_scale: (optional) If bias_field_std is strictly positive, this designates the ratio between the
     size of the input label maps and the size of the first sampled tensor for synthesising the bias field.
+    :param bias_prob: (optional) probability of actually applying a sampled bias field to an image (the rest are
+    left bias-free). Default .95. Lower it to leave a real fraction of clean images in the stream: a head whose
+    target is read off the corrupted image (bias severity, tissue means) otherwise never sees the uncorrupted end
+    of its own range. When return_bias_std is on the returned field is zeroed on the same draw that skips the
+    bias, so a bias-free image gets std_log = 0. Only used when bias_field_std>0.
+    :param bias_std_masked: (optional) when return_bias_std is on, whether the returned std of the log-bias
+    field is taken over the brain (non-background voxels, the default, back-compatible) or over all voxels of
+    the crop (False, the mask-free severity a QC head can reproduce with no segmentation). Only used when
+    return_bias_std is on.
+    :param return_bias_std: (optional) whether to return the bias field standard deviation as an output of the model.
     :param return_gradients: (optional) whether to return the synthetic image or the magnitude of its spatial gradient
     (computed with Sobel kernels).
     """
@@ -183,8 +215,22 @@ def labels_to_image_model(labels_shape,
     image = layers.SampleConditionalGMM(generation_labels)([labels, means_input, stds_input])
 
     # apply bias field
+    bias_std_log = None
     if bias_field_std > 0:
-        image = layers.BiasFieldCorruption(bias_field_std, bias_scale, False)(image)
+        if return_bias_std:
+            image, log_bias = layers.BiasFieldCorruption(bias_field_std, bias_scale, False,
+                                                         prob=bias_prob, return_field=True)(image)
+            # expose the realised log-bias field B(x) and the masking labels as named layers (identity
+            # pass-throughs, numerically unchanged) so a field-estimation QC head can read the per-voxel
+            # ground truth and the brain mask, alongside the scalar 'bias_field_std'.
+            log_bias = KL.Lambda(lambda x: x, name='bias_field_log')(log_bias)
+            labels_for_mask = KL.Lambda(lambda x: x, name='bias_mask_labels')(labels)
+            if bias_std_masked:
+                bias_std_log = KL.Lambda(_masked_std, name='bias_field_std')([log_bias, labels_for_mask])
+            else:
+                bias_std_log = KL.Lambda(_whole_std, name='bias_field_std')(log_bias)
+        else:
+            image = layers.BiasFieldCorruption(bias_field_std, bias_scale, False, prob=bias_prob)(image)
 
     # intensity augmentation
     image = layers.IntensityAugmentation(clip=300, normalise=True, gamma_std=.5, separate_channels=True)(image)
@@ -228,7 +274,8 @@ def labels_to_image_model(labels_shape,
 
     # build model (dummy layer enables to keep the labels when plugging this model to other models)
     image = KL.Lambda(lambda x: x[0], name='image_out')([image, labels])
-    brain_model = Model(inputs=list_inputs, outputs=[image, labels])
+    outputs = [image, labels] + ([bias_std_log] if bias_std_log is not None else [])
+    brain_model = Model(inputs=list_inputs, outputs=outputs)
 
     return brain_model
 
