@@ -1015,7 +1015,8 @@ class BiasFieldCorruption(Layer):
     :param prob: probability to apply this bias field corruption.
     """
 
-    def __init__(self, bias_field_std=.5, bias_scale=.025, same_bias_for_all_channels=False, prob=0.95, **kwargs):
+    def __init__(self, bias_field_std=.5, bias_scale=.025, same_bias_for_all_channels=False, prob=0.95,
+                 return_field=False,**kwargs):
 
         # input shape
         self.several_inputs = False
@@ -1033,6 +1034,9 @@ class BiasFieldCorruption(Layer):
         self.same_bias_for_all_channels = same_bias_for_all_channels
         self.prob = prob
 
+        # whether to return the bias field as an output
+        self.return_field = return_field
+
         super(BiasFieldCorruption, self).__init__(**kwargs)
 
     def get_config(self):
@@ -1041,6 +1045,7 @@ class BiasFieldCorruption(Layer):
         config["bias_scale"] = self.bias_scale
         config["same_bias_for_all_channels"] = self.same_bias_for_all_channels
         config["prob"] = self.prob
+        config["return_field"] = self.return_field
         return config
 
     def build(self, input_shape):
@@ -1064,6 +1069,16 @@ class BiasFieldCorruption(Layer):
         self.built = True
         super(BiasFieldCorruption, self).build(input_shape)
 
+    def compute_output_shape(self, input_shape):
+        # when return_field is on, this layer emits an extra tensor (the log-bias field B(x)) with the same
+        # shape as the (first) input. without this override keras returns one shape for two outputs and
+        # _add_inbound_node raises "IndexError: list index out of range".
+        if not self.return_field:
+            return input_shape
+        if isinstance(input_shape, list):
+            return input_shape + [input_shape[0]]
+        return [input_shape, input_shape]
+
     def call(self, inputs, **kwargs):
 
         if not self.several_inputs:
@@ -1077,24 +1092,31 @@ class BiasFieldCorruption(Layer):
             bias_shape = tf.concat([batchsize, tf.convert_to_tensor(self.small_bias_shape, dtype='int32')], axis=0)
 
             # sample small bias field
-            bias_field = tf.random.normal(bias_shape, stddev=tf.random.uniform(std_shape, maxval=self.bias_field_std))
+            log_bias = tf.random.normal(bias_shape, stddev=tf.random.uniform(std_shape, maxval=self.bias_field_std))
 
             # resize bias field and take exponential
-            bias_field = nrn_layers.Resize(size=self.inshape[0][1:self.n_dims + 1], interp_method='linear')(bias_field)
-            bias_field = tf.math.exp(bias_field)
+            log_bias = nrn_layers.Resize(size=self.inshape[0][1:self.n_dims + 1], interp_method='linear')(log_bias)
+            bias_field = tf.math.exp(log_bias)
 
             # apply bias field with predefined probability
             if self.prob == 1:
-                return [tf.math.multiply(bias_field, v) for v in inputs]
+                out = [tf.math.multiply(bias_field, v) for v in inputs]
             else:
                 rand_trans = tf.squeeze(K.less(tf.random.uniform([1], 0, 1), self.prob))
-                if self.several_inputs:
-                    return [K.switch(rand_trans, tf.math.multiply(bias_field, v), v) for v in inputs]
-                else:
-                    return K.switch(rand_trans, tf.math.multiply(bias_field, inputs[0]), inputs[0])
+                out = [K.switch(rand_trans, tf.math.multiply(bias_field, v), v) for v in inputs]
+                # when the draw skips the bias the image is left unchanged (out = v), so the returned field
+                # has to be zeroed on the same draw. otherwise a bias-free image would carry the sampled
+                # non-zero field, and a QC head using _masked_std(field) as its target (return_field=True)
+                # would be taught that a clean image is severe.
+                if self.return_field:
+                    log_bias = K.switch(rand_trans, log_bias, tf.zeros_like(log_bias))
+
+            out = out if self.several_inputs else out[0]
+            return [out, log_bias] if self.return_field else out
 
         else:
-            return inputs
+            return [inputs if self.several_inputs else inputs[0],
+                    tf.zeros_like(inputs[0])] if self.return_field else inputs
 
 
 class IntensityAugmentation(Layer):
