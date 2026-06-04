@@ -58,6 +58,7 @@ class BrainGenerator:
                  thickness=None,
                  bias_field_std=.7,
                  bias_scale=.025,
+                 return_bias_std=False,
                  return_gradients=False):
         """
         This class is wrapper around the labels_to_image_model model. It contains the GPU model that generates images
@@ -187,7 +188,7 @@ class BrainGenerator:
         std dev of the normal distribution from which we sample the first tensor. Set to 0 to deactivate bias field.
         :param bias_scale: (optional) If bias_field_std is strictly positive, this designates the ratio between
         the size of the input label maps and the size of the first sampled tensor for synthesising the bias field.
-
+        :param return_bias_std: (optional) whether to return the bias field standard deviation as an output of the model.
         :param return_gradients: (optional) whether to return the synthetic image or the magnitude of its spatial
         gradient (computed with Sobel kernels).
         """
@@ -257,6 +258,7 @@ class BrainGenerator:
         # bias field parameters
         self.bias_field_std = bias_field_std
         self.bias_scale = bias_scale
+        self.return_bias_std = return_bias_std
         self.return_gradients = return_gradients
 
         # build transformation model
@@ -294,6 +296,7 @@ class BrainGenerator:
                                                 thickness=self.thickness,
                                                 bias_field_std=self.bias_field_std,
                                                 bias_scale=self.bias_scale,
+                                                return_bias_std=self.return_bias_std,
                                                 return_gradients=self.return_gradients)
         out_shape = lab_to_im_model.output[0].get_shape().as_list()[1:]
         return lab_to_im_model, out_shape
@@ -316,12 +319,20 @@ class BrainGenerator:
     def _build_brain_generator(self):
         while True:
             model_inputs = next(self.model_inputs_generator)
-            [image, labels] = self.labels_to_image_model.predict(model_inputs)
-            yield image, labels
+            out = self.labels_to_image_model.predict(model_inputs)
+            if self.return_bias_std:
+                image, labels, bias_std = out
+                yield image, labels, bias_std
+            else:
+                image, labels = out
+                yield image, labels
 
     def generate_brain(self):
         """call this method when an object of this class has been instantiated to generate new brains"""
-        (image, labels) = next(self.brain_generator)
+        if self.return_bias_std:
+            (image, labels, bias_std) = next(self.brain_generator)
+        else:
+            (image, labels) = next(self.brain_generator)
         # put back images in native space
         list_images = list()
         list_labels = list()
@@ -332,4 +343,6 @@ class BrainGenerator:
                                                                 aff_ref=self.aff, n_dims=self.n_dims))
         image = np.squeeze(np.stack(list_images, axis=0))
         labels = np.squeeze(np.stack(list_labels, axis=0))
+        if self.return_bias_std:
+            return image, labels, np.squeeze(bias_std)
         return image, labels
