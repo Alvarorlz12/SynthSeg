@@ -44,3 +44,16 @@ scripts/tutorials/outputs_tutorial_*/
 .DS_Store
 .ipynb_checkpoints/
 .vscode/
+
+# Run outputs: checkpoints, TensorBoard, per-epoch validation, figures. Kept out of the repo and
+# referenced from the report instead.
+logs_*/
+models/*/
+results_real*/
+field_plots/
+spectral_field_plots*/
+
+# Local scratch: per-run analysis, notebook builders, probe intermediates. The tools worth
+# publishing live in tools/, so nothing here needs an exception.
+scratchpad/
+_res.npy
