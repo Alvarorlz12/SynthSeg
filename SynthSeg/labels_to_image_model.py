@@ -73,6 +73,7 @@ def labels_to_image_model(labels_shape,
                           bias_prob=.95,
                           bias_std_masked=True,
                           return_bias_std=False,
+                          return_resolution=False,
                           return_gradients=False):
     """
     This function builds a keras/tensorflow model to generate images from provided label maps.
@@ -171,6 +172,10 @@ def labels_to_image_model(labels_shape,
     the crop (False, the mask-free severity a QC head can reproduce with no segmentation). Only used when
     return_bias_std is on.
     :param return_bias_std: (optional) whether to return the bias field standard deviation as an output of the model.
+    :param return_resolution: (optional) whether to expose the realised per-axis voxel spacing (the effective
+    resolution the content is degraded to, in mm/axis) as the named output layer 'resolution'. Requires
+    randomise_res=True. In-graph regression target for the resolution-QC head, like return_bias_std. Slice
+    thickness is a nuisance latent and is not exposed. Only supported for n_channels=1 (channel-0 spacing).
     :param return_gradients: (optional) whether to return the synthetic image or the magnitude of its spatial gradient
     (computed with Sobel kernels).
     """
@@ -237,6 +242,11 @@ def labels_to_image_model(labels_shape,
 
     # loop over channels
     channels = list()
+    resolution_out = None
+    if return_resolution:
+        assert randomise_res, 'return_resolution=True requires randomise_res=True (the per-axis resolution is only ' \
+                              'sampled on the randomise_res path).'
+        assert n_channels == 1, 'return_resolution currently exposes only channel-0 spacing; use n_channels=1.'
     split = KL.Lambda(lambda x: tf.split(x, [1] * n_channels, axis=-1))(image) if (n_channels > 1) else [image]
     for i, channel in enumerate(split):
 
@@ -245,6 +255,8 @@ def labels_to_image_model(labels_shape,
             max_res_aniso = np.array(utils.reformat_to_list(max_res_aniso, length=n_dims, dtype='float'))
             max_res = np.maximum(max_res_iso, max_res_aniso)
             resolution, blur_res = layers.SampleResolution(atlas_res, max_res_iso, max_res_aniso)(means_input)
+            if return_resolution and (i == 0):
+                resolution_out = KL.Lambda(lambda x: x, name='resolution')(resolution)
             sigma = l2i_et.blurring_sigma_for_downsampling(atlas_res, resolution, thickness=blur_res)
             channel = layers.DynamicGaussianBlur(0.75 * max_res / np.array(atlas_res), 1.03)([channel, sigma])
             channel = layers.MimicAcquisition(atlas_res, atlas_res, output_shape, False)([channel, resolution])
@@ -274,7 +286,8 @@ def labels_to_image_model(labels_shape,
 
     # build model (dummy layer enables to keep the labels when plugging this model to other models)
     image = KL.Lambda(lambda x: x[0], name='image_out')([image, labels])
-    outputs = [image, labels] + ([bias_std_log] if bias_std_log is not None else [])
+    outputs = [image, labels] + ([bias_std_log] if bias_std_log is not None else []) \
+                              + ([resolution_out] if resolution_out is not None else [])
     brain_model = Model(inputs=list_inputs, outputs=outputs)
 
     return brain_model
