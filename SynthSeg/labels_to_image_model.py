@@ -66,6 +66,7 @@ def labels_to_image_model(labels_shape,
                           randomise_res=False,
                           max_res_iso=4.,
                           max_res_aniso=8.,
+                          grid_ablation=None,
                           data_res=None,
                           thickness=None,
                           bias_field_std=.5,
@@ -243,6 +244,8 @@ def labels_to_image_model(labels_shape,
     # loop over channels
     channels = list()
     resolution_out = None
+    assert grid_ablation in (None, 'none', 'blur_only', 'kernel_random', 'kernel_phase'), \
+        "grid_ablation must be one of None/'none'/'blur_only'/'kernel_random'/'kernel_phase', got %r" % (grid_ablation,)
     if return_resolution:
         assert randomise_res, 'return_resolution=True requires randomise_res=True (the per-axis resolution is only ' \
                               'sampled on the randomise_res path).'
@@ -259,7 +262,14 @@ def labels_to_image_model(labels_shape,
                 resolution_out = KL.Lambda(lambda x: x, name='resolution')(resolution)
             sigma = l2i_et.blurring_sigma_for_downsampling(atlas_res, resolution, thickness=blur_res)
             channel = layers.DynamicGaussianBlur(0.75 * max_res / np.array(atlas_res), 1.03)([channel, sigma])
-            channel = layers.MimicAcquisition(atlas_res, atlas_res, output_shape, False)([channel, resolution])
+            # grid-cheat ablation (resolution-QC sim-to-real diagnostic): 'blur_only' bypasses the resampling-grid
+            # imprint (only the Gaussian blur cue remains); 'kernel_random' randomizes the resample kernel + sub-voxel
+            # grid phase so the fixed SynthSeg grid signature can't be memorized; None/'none' = original behaviour.
+            channel = layers.MimicAcquisition(atlas_res, atlas_res, output_shape, False,
+                                              skip_resample=(grid_ablation == 'blur_only'),
+                                              randomize_kernel=(grid_ablation in ('kernel_random', 'kernel_phase')),
+                                              randomize_up_method=(grid_ablation == 'kernel_random'))(
+                                                  [channel, resolution])
             channels.append(channel)
 
         else:

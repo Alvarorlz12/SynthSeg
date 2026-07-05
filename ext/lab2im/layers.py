@@ -873,7 +873,8 @@ class MimicAcquisition(Layer):
     """
 
     def __init__(self, volume_res, min_subsample_res, resample_shape, build_dist_map=False,
-                 noise_std=0, prob_noise=0.95, **kwargs):
+                 noise_std=0, prob_noise=0.95, skip_resample=False, randomize_kernel=False,
+                 randomize_up_method=False, kernel_phase_jitter=0.5, **kwargs):
 
         # resolutions and dimensions
         self.volume_res = volume_res
@@ -897,6 +898,16 @@ class MimicAcquisition(Layer):
         # whether to return a map indicating the distance from the interpolated voxels, to acquired ones.
         self.build_dist_map = build_dist_map
 
+        # grid ablation knobs, all off by default. skip_resample bypasses the nearest-down/linear-up resampling
+        # and passes the input through unchanged, leaving the upstream Gaussian blur as the only resolution cue.
+        # It is only valid when the input is already at resample_shape, which is the case on the randomise_res path.
+        # randomize_kernel jitters the sub-voxel phase of both grids and picks the up interpolation at random, so
+        # the fixed grid signature is destroyed while the true zoom factor (= spacing) is preserved.
+        self.skip_resample = skip_resample
+        self.randomize_kernel = randomize_kernel
+        self.randomize_up_method = randomize_up_method
+        self.kernel_phase_jitter = kernel_phase_jitter
+
         super(MimicAcquisition, self).__init__(**kwargs)
 
     def get_config(self):
@@ -907,6 +918,10 @@ class MimicAcquisition(Layer):
         config["build_dist_map"] = self.build_dist_map
         config["noise_std"] = self.noise_std
         config["prob_noise"] = self.prob_noise
+        config["skip_resample"] = self.skip_resample
+        config["randomize_kernel"] = self.randomize_kernel
+        config["randomize_up_method"] = self.randomize_up_method
+        config["kernel_phase_jitter"] = self.kernel_phase_jitter
         return config
 
     def build(self, input_shape):
@@ -931,6 +946,11 @@ class MimicAcquisition(Layer):
         vol = inputs[0]
         subsample_res = tf.cast(inputs[1], dtype='float32')
         vol = K.reshape(vol, [-1, *self.inshape])  # necessary for multi_gpu models
+
+        # blur-only ablation: identity passthrough (input shape equals resample_shape on the randomise_res path).
+        if self.skip_resample:
+            return [vol, tf.zeros_like(vol[..., :1])] if self.build_dist_map else vol
+
         batchsize = tf.split(tf.shape(vol), [1, -1])[0]
         tile_shape = tf.concat([batchsize, tf.ones([1], dtype='int32')], 0)
 
@@ -947,6 +967,13 @@ class MimicAcquisition(Layer):
         down_loc = tf.cast(down_loc, 'float32') / l2i_et.expand_dims(down_zoom_factor, axis=[1] * self.n_dims)
         inshape_tens = tf.tile(tf.expand_dims(tf.convert_to_tensor(self.inshape[:-1]), 0), tile_shape)
         inshape_tens = l2i_et.expand_dims(inshape_tens, axis=[1] * self.n_dims)
+        if self.randomize_kernel and self.kernel_phase_jitter > 0:
+            # per-axis phase jitter scaled by how degraded each axis is (1 - down_zoom_factor): a native axis (zoom==1,
+            # where the full pipeline is a bit-exact identity) gets exactly 0 jitter so it is never spuriously blurred;
+            down_scale = tf.clip_by_value(1. - down_zoom_factor, 0., 1.)
+            down_jit = down_scale * tf.random.uniform(tf.shape(down_zoom_factor),
+                                                      -self.kernel_phase_jitter, self.kernel_phase_jitter)
+            down_loc += l2i_et.expand_dims(down_jit, axis=[1] * self.n_dims)
         down_loc = K.clip(down_loc, 0., tf.cast(inshape_tens, 'float32'))
         vol = tf.map_fn(self._single_down_interpn, [vol, down_loc], tf.float32)
 
@@ -963,7 +990,27 @@ class MimicAcquisition(Layer):
         # upsample
         up_loc = tf.tile(self.up_grid, tf.concat([batchsize, tf.ones([self.n_dims + 1], dtype='int32')], axis=0))
         up_loc = tf.cast(up_loc, 'float32') / l2i_et.expand_dims(up_zoom_factor, axis=[1] * self.n_dims)
-        vol = tf.map_fn(self._single_up_interpn, [vol, up_loc], tf.float32)
+        if self.randomize_kernel:
+            # interpn clips out-of-range locations internally, so the sub-voxel phase jitter is safe.
+            if self.kernel_phase_jitter > 0:
+                # per-axis jitter scaled by degradation (1 - 1/up_zoom_factor): a native axis gives 0 (kept bit-exact
+                # identity; see the down stage).
+                up_scale = tf.clip_by_value(1. - 1. / up_zoom_factor, 0., 1.)
+                up_jit = up_scale * tf.random.uniform(tf.shape(up_zoom_factor),
+                                                      -self.kernel_phase_jitter, self.kernel_phase_jitter)
+                up_loc += l2i_et.expand_dims(up_jit, axis=[1] * self.n_dims)
+            if self.randomize_up_method:
+                # randomize the reconstruction kernel (nearest or linear). nearest-up creates block edges that
+                # masquerade as high-frequency detail and poison the finite-difference features, and it is also
+                # unrealistic (real resampling uses linear/cubic/sinc). the 'kernel_phase' ablation sets this False and
+                # keeps only the realistic linear reconstruction with a jittered phase.
+                up_linear = tf.map_fn(self._single_up_interpn, [vol, up_loc], tf.float32)
+                up_nearest = tf.map_fn(self._single_down_interpn, [vol, up_loc], tf.float32)
+                vol = K.switch(tf.squeeze(K.less(tf.random.uniform([1], 0, 1), 0.5)), up_linear, up_nearest)
+            else:
+                vol = tf.map_fn(self._single_up_interpn, [vol, up_loc], tf.float32)
+        else:
+            vol = tf.map_fn(self._single_up_interpn, [vol, up_loc], tf.float32)
 
         # return upsampled volume
         if not self.build_dist_map:
