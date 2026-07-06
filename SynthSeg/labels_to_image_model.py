@@ -61,6 +61,7 @@ def labels_to_image_model(labels_shape,
                           rotation_bounds=15,
                           shearing_bounds=0.012,
                           translation_bounds=False,
+                          enable_90_rotations=False,
                           nonlin_std=3.,
                           nonlin_scale=.0625,
                           randomise_res=False,
@@ -131,6 +132,8 @@ def labels_to_image_model(labels_shape,
     :param shearing_bounds: (optional) same as scaling bounds. Default is shearing_bounds = 0.012.
     :param translation_bounds: (optional) same as scaling bounds. Default is translation_bounds = False, but we
     encourage using it when cropping is deactivated (i.e. when output_shape=None in BrainGenerator).
+    :param enable_90_rotations: (optional) whether to also draw random 90 degree rotations, on top of the small
+    rotations set by rotation_bounds. Default is False.
     :param nonlin_std: (optional) Maximum value for the standard deviation of the normal distribution from which we
     sample the first tensor for synthesising the deformation field. Set to 0 if you wish to completely turn the elastic
     deformation off.
@@ -204,6 +207,7 @@ def labels_to_image_model(labels_shape,
                                              rotation_bounds=rotation_bounds,
                                              shearing_bounds=shearing_bounds,
                                              translation_bounds=translation_bounds,
+                                             enable_90_rotations=enable_90_rotations,
                                              nonlin_std=nonlin_std,
                                              nonlin_scale=nonlin_scale,
                                              inter_method='nearest')(labels_input)
