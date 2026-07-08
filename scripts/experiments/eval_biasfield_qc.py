@@ -65,6 +65,7 @@ generator = labels_to_image_model(labels_shape=labels_shape, n_channels=1,
                                   scaling_bounds=False, rotation_bounds=False, shearing_bounds=False,
                                   translation_bounds=False, nonlin_std=0, randomise_res=False,
                                   bias_field_std=BIAS_FIELD_STD, bias_scale=BIAS_SCALE,
+                                  intensity_gamma_std=0.,   # match the training scope
                                   return_bias_std=True)
 reg = build_biasqc_model(generator, N_LEVELS, NB_CONV_PER_LEVEL, CONV_SIZE,
                          UNET_FEAT_COUNT, FEAT_MULTIPLIER, ACTIVATION)

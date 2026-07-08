@@ -158,7 +158,8 @@ def training(labels_dir,
                                       shearing_bounds=False, translation_bounds=False,
                                       nonlin_std=0, randomise_res=False,   # clean scope
                                       bias_field_std=bias_field_std, bias_scale=bias_scale,
-                                      return_bias_std=True)                # gamma is auto-off on this path
+                                      intensity_gamma_std=0.,   # clean scope: the bias is the only nuisance
+                                      return_bias_std=True)
 
     # 2) regression head on the synthetic image (generator.outputs[0])
     regression_model = build_biasqc_model(input_model=generator,
