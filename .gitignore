@@ -57,3 +57,8 @@ spectral_field_plots*/
 # publishing live in tools/, so nothing here needs an exception.
 scratchpad/
 _res.npy
+
+# Label maps derived from ADNI2 and HCP. Their data use agreements forbid redistribution, and the
+# filenames are the subject identifiers.
+data/training_label_maps_cerebral/
+__MACOSX/
