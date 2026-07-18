@@ -23,6 +23,40 @@ from keras.models import Model
 import keras.backend as K
 
 
+class InstanceNormalization(KL.Layer):
+    """Per-sample, per-channel normalisation over the spatial axes, with a learnable affine.
+
+    At batch size 1 a BatchNormalization(axis=-1) computes exactly this in its training branch, but its
+    inference branch swaps in the moving averages, so the function that was trained and the function that is
+    deployed differ. This layer has no such branch, which matters when the contrast is randomised per image and
+    the per-image statistics vary a lot.
+    """
+
+    def __init__(self, eps=1e-5, **kwargs):
+        super(InstanceNormalization, self).__init__(**kwargs)
+        self.eps = eps
+
+    def build(self, input_shape):
+        c = int(input_shape[-1])
+        self.gamma = self.add_weight(name='gamma', shape=(c,), initializer='ones', trainable=True)
+        self.beta = self.add_weight(name='beta', shape=(c,), initializer='zeros', trainable=True)
+        super(InstanceNormalization, self).build(input_shape)
+
+    def call(self, x, **kwargs):
+        axes = list(range(1, K.ndim(x) - 1))  # the spatial axes, per sample and per channel
+        mean = K.mean(x, axis=axes, keepdims=True)
+        var = K.var(x, axis=axes, keepdims=True)
+        return self.gamma * (x - mean) / K.sqrt(var + self.eps) + self.beta
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+    def get_config(self):
+        config = super(InstanceNormalization, self).get_config()
+        config.update({'eps': self.eps})
+        return config
+
+
 def unet(nb_features,
          input_shape,
          nb_levels,
@@ -269,6 +303,7 @@ def conv_enc(nb_features,
              nb_conv_per_level=2,
              conv_dropout=0,
              batch_norm=None,
+             instance_norm=False,
              input_model=None):
     """Fully Convolutional Encoder"""
 
@@ -346,7 +381,10 @@ def conv_enc(nb_features,
             name = '%s_res_down_merge_act_%d' % (prefix, level)
             last_tensor = KL.Activation(activation, name=name)(last_tensor)
 
-        if batch_norm is not None:
+        if instance_norm:
+            name = '%s_in_down_%d' % (prefix, level)
+            last_tensor = InstanceNormalization(name=name)(last_tensor)
+        elif batch_norm is not None:
             name = '%s_bn_down_%d' % (prefix, level)
             last_tensor = KL.BatchNormalization(axis=batch_norm, name=name)(last_tensor)
 
