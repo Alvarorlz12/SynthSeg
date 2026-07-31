@@ -197,12 +197,13 @@ def plot_validation_curves(list_validation_dirs, architecture_names=None, eval_i
 
 
 def draw_learning_curve(path_tensorboard_files, architecture_names, figsize=(11, 6), fontsize=18,
-                        y_lim=None, remove_legend=False):
+                        y_lim=None, remove_legend=False, ylabel='Scores'):
     """This function draws the learning curve of several trainings on the same graph.
     :param path_tensorboard_files: list of tensorboard files corresponding to the models to plot.
     :param architecture_names: list of the names of the models
     :param figsize: (optional) size of the figure to draw.
     :param fontsize: (optional) fontsize used for the graph.
+    :param ylabel: (optional) label of the y axis. Default is 'Scores'.
     """
 
     # reformat inputs
@@ -233,7 +234,7 @@ def draw_learning_curve(path_tensorboard_files, architecture_names, figsize=(11,
     if not remove_legend:
         plt.legend(fontsize=fontsize)
     plt.xlabel('Epochs', fontsize=fontsize)
-    plt.ylabel('Scores', fontsize=fontsize)
+    plt.ylabel(ylabel, fontsize=fontsize)
     if y_lim is not None:
         plt.ylim(y_lim[0], y_lim[1] + 0.01)  # set right/left limits of plot
     plt.tick_params(axis='both', labelsize=fontsize)
