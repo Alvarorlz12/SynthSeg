@@ -62,5 +62,13 @@ _res.npy
 # difference against SynthSeg.
 scripts/slurm/
 
-# Label maps derived from ADNI2 and HCP (992)
-data/training_label_maps_cerebral/
+# Label maps derived from ADNI2 and HCP (992). The filenames ARE the subject ids, so every tree of them
+# stays out, whatever it gets called next: the pattern is on the name and not on one path because naming
+# a single directory is what let training_label_maps_extra_cerebral/ sit here uncovered. The 20 maps
+# shipped by upstream are public and stay in.
+data/*label_maps*/
+!data/training_label_maps/
+
+# The train/val/test split: one row per map, so it is the same list of subject ids in a csv. It belongs
+# next to the label maps, not in a public repo; scripts/experiments/make_splits.py rebuilds it.
+data/splits/
