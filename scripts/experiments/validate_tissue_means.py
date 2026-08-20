@@ -25,6 +25,7 @@ If you use this code, please cite one of the SynthSeg papers:
 https://github.com/BBillot/SynthSeg/blob/master/bibtex.bib
 """
 
+import json
 import os
 import re
 import sys
@@ -42,6 +43,7 @@ import keras.layers as KL
 import keras.models as KM
 
 from ext.lab2im import utils
+from SynthSeg import synth_dataset as ds
 from SynthSeg import training_tissue_means as tm
 from SynthSeg.model_inputs import build_model_inputs
 
@@ -64,13 +66,32 @@ def masked_mse(pred, true, present, min_vox):
     return (w * (true - pred) ** 2).sum(axis=1) / (w.sum(axis=1) + eps)
 
 
-def build_validation_set(a, gen_labels, gen_classes, names, hold_paths, cache_path):
-    """Draw n_images once from the held-out label maps and keep them. This is the fixed set."""
+# what decides the contents of a set for this head. The three tissue means and the presence gate
+# are what its target is, so `tissues` is in here and the bias regime is not.
+FINGERPRINT = ('labels_dir', 'holdout', 'n_images', 'seed', 'output_shape', 'neutral_labels',
+               'tissues', 'generation_labels', 'generation_classes', 'no_deform', 'randomise_res',
+               'bias_std', 'bias_prob', 'gamma_std', 'gamma_prob', 'clip', 'max_res_iso',
+               'max_res_aniso')
+ARRAYS = ('images', 'mu_true', 'present')
 
-    if cache_path is not None and os.path.isfile(cache_path):
-        d = np.load(cache_path)
-        print('  reusing the cached validation set at %s' % cache_path)
-        return d['images'], d['mu_true'], d['present']
+
+def build_validation_set(a, gen_labels, gen_classes, names, hold_paths, set_path):
+    """Draw n_images once from the held-out label maps and keep them. This is the fixed set.
+
+    The file it writes is not a cache, it is the dataset: every number that ends up in a table is scored
+    against it, so it has to outlive the run that made it and it has to be able to say what it is. It
+    carries its own fingerprint (the arguments that decide its contents) and refuses to be reused under
+    a different one, because the failure it would otherwise cause is silent -- an existing file gets
+    reused whatever you ask for, and you score the new question against the old images.
+
+    Layout that goes with this, outside the repo and next to the real data:
+        $WORK/qc-data/synth/<head>/<split>/<name>.npz
+    e.g. .../synth/contrast/val/val_1000_clean.npz. The name is for humans; the fingerprint inside is
+    what decides whether two files are comparable, so a renamed file cannot lie about itself.
+    """
+
+    if set_path is not None and os.path.exists(set_path):
+        return ds.load_checked(set_path, ARRAYS, ds.fingerprint(a, FINGERPRINT, len(hold_paths), spatial(a)))
 
     labels_shape, _, _, _, _, atlas_res = utils.get_volume_info(hold_paths[0], aff_ref=np.eye(4))
     scaling = False if a.no_deform else .2
@@ -80,7 +101,8 @@ def build_validation_set(a, gen_labels, gen_classes, names, hold_paths, cache_pa
     generator = tm.build_generator(labels_shape, atlas_res, gen_labels, a.output_shape, 2 ** a.n_levels,
                                    a.neutral_labels, scaling, rotation, shearing, False, nonlin, .04,
                                    a.randomise_res, a.max_res_iso, a.max_res_aniso, a.bias_std,
-                                   a.gamma_std, a.clip, not a.no_deform)
+                                   a.gamma_std, a.clip, not a.no_deform,
+                                   bias_prob=a.bias_prob, gamma_prob=a.gamma_prob)
     lut, k = tm.build_tissue_lut(gen_labels, names)
     mu_true, present = tm.build_target(generator, lut, k)
     probe = KM.Model(generator.inputs, [generator.outputs[0], mu_true, present])
@@ -88,19 +110,20 @@ def build_validation_set(a, gen_labels, gen_classes, names, hold_paths, cache_pa
     src = build_model_inputs(path_label_maps=hold_paths, n_labels=len(gen_labels), batchsize=1,
                              n_channels=1, generation_classes=gen_classes, prior_distributions='uniform')
     np.random.seed(a.seed)
-    images, mus, pres = [], [], []
+    arrays = None
     info = utils.LoopInfo(a.n_images, 10, 'drawing', True)
     for i in range(a.n_images):
         info.update(i)
         img, mu, p = probe.predict(next(src))
-        images.append(img[0]); mus.append(mu[0]); pres.append(p[0])
-    images = np.array(images, dtype='float32')
-    mus, pres = np.array(mus), np.array(pres)
+        if arrays is None:   # the shapes are only known once the generator has produced one
+            arrays = ds.open_set(set_path, a.n_images,
+                                 [('images', img.shape[1:], 'float32'),
+                                  ('mu_true', mu.shape[1:], 'float32'),
+                                  ('present', p.shape[1:], 'float32')])
+        arrays[0][i], arrays[1][i], arrays[2][i] = img[0], mu[0], p[0]
+    images, mus, pres = arrays
 
-    if cache_path is not None:
-        np.savez(cache_path, images=images, mu_true=mus, present=pres)
-        print('  cached the validation set at %s (%.2f GB)'
-              % (cache_path, images.nbytes / 1e9))
+    ds.close_set(set_path, ARRAYS, arrays, ds.fingerprint(a, FINGERPRINT, len(hold_paths), spatial(a)))
     return images, mus, pres
 
 
@@ -123,6 +146,40 @@ def build_scorer(a, image_shape, k):
     return KM.Model(stand_in.inputs, [mu_pred])
 
 
+def spatial(a):
+    """The deformation block. Not command-line arguments -- both the training script and this one
+    hardcode the same numbers (.2 / 15 / .012 / False / 4. / .04, verified) -- but they decide the
+    images, so they go in the fingerprint. `output_div_by_n` is 2**n_levels and rounds the output shape,
+    which is why the architecture's depth is in here too."""
+    off = a.no_deform
+    return dict(scaling=False if off else .2, rotation=False if off else 15,
+                shearing=False if off else .012, translation=False,
+                nonlin_std=0. if off else 4., nonlin_scale=.04,
+                flipping=not off, output_div_by_n=2 ** a.n_levels)
+
+
+def select_checkpoints(ckpts, a):
+    """--epochs picks the ones you actually need; --step_eval thins the rest.
+
+    This exists because scoring is not cheap and is paid per checkpoint: at ~0.5 s an image on a
+    500-image set, one checkpoint is 4 minutes, so a 100-epoch curve is 7 hours while the single row a
+    table needs is 4 minutes. --step_eval cannot stand in for it, because it strides from the FIRST
+    checkpoint, so [::5] gives epochs 1, 6, 11 ... and never the 10 you asked for.
+
+    An epoch that does not exist is an error, not an empty selection: asking for 10 in a run that died
+    at 9 has to say so, or the scoring loop finds nothing to do and exits looking like a success."""
+    if not a.epochs:
+        return ckpts[::a.step_eval]
+    want = {int(e) for e in str(a.epochs).replace(' ', '').split(',') if e}
+    keep = [c for c in ckpts if epoch_of(c) in want]
+    missing = sorted(want - {epoch_of(c) for c in keep})
+    if missing:
+        raise SystemExit('no checkpoint for epoch(s) %s in this model dir (it has %d, up to %d)'
+                         % (', '.join(map(str, missing)), len(ckpts),
+                            epoch_of(ckpts[-1]) if ckpts else 0))
+    return keep
+
+
 def validate_training(a, model_dir, validation_dir, images, mu_true, present, k):
     """Score every checkpoint on the fixed set and write one npz per epoch."""
 
@@ -134,10 +191,15 @@ def validate_training(a, model_dir, validation_dir, images, mu_true, present, k)
     fn = K.function(net.inputs + [K.learning_phase()], net.outputs)
     phase = 0 if a.frozen_bn else 1
 
-    ckpts = sorted(glob.glob(os.path.join(model_dir, 'tm_*.h5')), key=epoch_of)[::a.step_eval]
-    print('  %d checkpoints, %d validation images, batch norm read %s'
-          % (len(ckpts), len(images), 'frozen, as predict does' if a.frozen_bn
-             else "on each image's own statistics, i.e. the net that was trained"))
+    ckpts = sorted(glob.glob(os.path.join(model_dir, 'tm_*.h5')), key=epoch_of)
+    ckpts = select_checkpoints(ckpts, a)
+    # only the batch arm has anything to say about the learning phase: with instance norm or none the
+    # net holds no BatchNormalization layer, so pinning the phase changes nothing and saying 'batch norm
+    # read ...' there is a claim about a layer that is not in the graph.
+    how = ('norm=%s, the learning phase does not enter this net' % a.norm if a.norm != 'batch' else
+           'batch norm read ' + ('frozen, as predict does' if a.frozen_bn
+                                 else "on each image's own statistics, i.e. the net that was trained"))
+    print('  %d checkpoints, %d validation images, %s' % (len(ckpts), len(images), how))
 
     info = utils.LoopInfo(len(ckpts), 1, 'validating', True)
     for i, ckpt in enumerate(ckpts):
@@ -226,15 +288,24 @@ def plot_validation_curves(validation_dirs, architecture_names, path_tensorboard
 def parse_args():
     p = ArgumentParser()
     p.add_argument('labels_dir', type=str)
-    p.add_argument('--model_dir', type=str, required=True)
+    p.add_argument('--model_dir', type=str, default=None,
+                   help='not needed with --build_only')
     p.add_argument('--validation_dir', type=str, default=None,
                    help='defaults to model_dir/validation')
-    p.add_argument('--cache', type=str, default=None,
-                   help='npz to keep the fixed validation set in. strongly recommended: it is what makes '
-                        'two runs of this script comparable, and what makes two arms comparable')
+    p.add_argument('--dataset', '--cache', type=str, default=None, dest='dataset',
+                   help='where the fixed set lives. NOT a cache: it is the dataset, it carries its '
+                        'own fingerprint and is refused if the settings do not match. A path without a '
+                        '.npz extension is a DIRECTORY of images.npy + mu_true.npy + present.npy + '
+                        'meta.json, which is memory-mappable and the form to use; .npz still works and '
+                        'is read whole into ram. Keep it outside the repo, e.g. '
+                        '$WORK/qc-data/synth/contrast/val/val_1000_clean')
     p.add_argument('--n_images', type=int, default=100,
                    help='images in the fixed set. 100 at 160^3 is about 1.6 GB in ram and on disk')
     p.add_argument('--step_eval', type=int, default=1)
+    p.add_argument('--epochs', type=str, default=None,
+                   help="comma-separated epochs to score, e.g. '10' or '10,50,100'. Overrides "
+                        '--step_eval, which strides from the first checkpoint and so cannot land on a '
+                        'given epoch. Use it when you need a table row rather than a curve')
     p.add_argument('--recompute', action='store_true')
     p.add_argument('--plot_only', action='store_true')
     p.add_argument('--generation_labels', type=str, default='data/labels_classes_priors/generation_labels.npy')
@@ -252,6 +323,10 @@ def parse_args():
     p.add_argument('--randomise_res', action='store_true')
     p.add_argument('--bias_std', type=float, default=0.)
     p.add_argument('--gamma_std', type=float, default=0.)
+    # in the generator's signature, not on the training script's command line by accident: they
+    # decide how often the corruption fires, so a run that changes them needs its own set.
+    p.add_argument('--bias_prob', type=float, default=.95)
+    p.add_argument('--gamma_prob', type=float, default=1.)
     p.add_argument('--clip', type=int, default=0)
     p.add_argument('--max_res_iso', type=float, default=4.)
     p.add_argument('--max_res_aniso', type=float, default=8.)
@@ -270,6 +345,10 @@ def parse_args():
     p.add_argument('--frozen_bn', action='store_true',
                    help='read the checkpoints the way predict does, with the moving averages, instead of '
                         'the way training fitted them. this is the read keras logs online during training')
+    p.add_argument('--build_only', action='store_true',
+                   help='build the dataset and stop: no checkpoint is scored and --model_dir is '
+                        'not needed. Building is minutes of GPU and scoring is hours, so they are '
+                        'worth separating -- and a set that exists is what every later run reuses')
     p.add_argument('--min_vox', type=int, default=8)
     p.add_argument('--seed', type=int, default=0)
     return p.parse_args()
@@ -278,7 +357,9 @@ def parse_args():
 def main():
     a = parse_args()
     print('config:', vars(a))
-    validation_dir = a.validation_dir or os.path.join(resolve(a.model_dir), 'validation')
+    assert a.model_dir or a.build_only, '--model_dir is required unless --build_only'
+    validation_dir = (a.validation_dir if a.build_only else
+                      a.validation_dir or os.path.join(resolve(a.model_dir), 'validation'))
 
     if not a.plot_only:
         gen_labels = np.asarray(utils.load_array_if_path(resolve(a.generation_labels))).astype('int32')
@@ -294,7 +375,15 @@ def main():
 
         print('\nbuilding the fixed validation set:')
         images, mu_true, present = build_validation_set(a, gen_labels, gen_classes, names, hold_paths,
-                                                        resolve(a.cache) if a.cache else None)
+                                                        resolve(a.dataset) if a.dataset else None)
+        if a.build_only:
+            print('--build_only: the dataset is written, nothing scored.')
+            return
+        if a.dataset:
+            # the scoring loop skips checkpoints already scored, so a directory of scores has to know
+            # which dataset produced them or a rebuilt set leaves stale numbers in a curve.
+            ds.stamp_validation_dir(validation_dir, resolve(a.dataset),
+                                    ds.fingerprint(a, FINGERPRINT, len(hold_paths), spatial(a)))
         _, k = tm.build_tissue_lut(gen_labels, names)
 
         print('\nscoring the checkpoints:')
