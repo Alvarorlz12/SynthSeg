@@ -535,6 +535,7 @@ class SampleResolution(Layer):
                  prob_iso=0.1,
                  prob_min=0.05,
                  return_thickness=True,
+                 uniform_per_axis=False,
                  **kwargs):
 
         self.min_res = min_resolution
@@ -545,6 +546,11 @@ class SampleResolution(Layer):
         self.prob_iso = prob_iso
         self.prob_min = prob_min
         self.return_thickness = return_thickness
+        # uniform_per_axis draws each axis independently from U(min_res, max), returning min_res on all
+        # of them with probability prob_min instead. The stock branches below couple the axes: when one
+        # is coarse the other two sit at min_res exactly, which a net can read instead of the blur.
+        self.uniform_per_axis = uniform_per_axis
+        self.uni_hi = None
         self.n_dims = len(self.min_res)
         self.add_batchsize = False
         self.min_res_tens = None
@@ -558,6 +564,7 @@ class SampleResolution(Layer):
         config["prob_iso"] = self.prob_iso
         config["prob_min"] = self.prob_min
         config["return_thickness"] = self.return_thickness
+        config["uniform_per_axis"] = self.uniform_per_axis
         return config
 
     def build(self, input_shape):
@@ -590,6 +597,16 @@ class SampleResolution(Layer):
         if input_shape:
             self.add_batchsize = True
 
+        if self.uniform_per_axis:
+            ups = [u for u in (self.max_res_iso, self.max_res_aniso) if u is not None]
+            assert ups, 'uniform_per_axis needs an upper bound: give max_res_iso and/or max_res_aniso'
+            hi = ups[0] if len(ups) == 1 else np.maximum(ups[0], ups[1])
+            assert np.all(hi > self.min_res), \
+                'uniform_per_axis needs max > min on every axis, had min %s and max %s' % (self.min_res, hi)
+            assert 0. <= self.prob_min < 1., \
+                'uniform_per_axis needs prob_min in [0, 1), had %s' % self.prob_min
+            self.uni_hi = np.asarray(hi, dtype='float32')
+
         self.min_res_tens = tf.convert_to_tensor(self.min_res, dtype='float32')
 
         self.built = True
@@ -610,6 +627,18 @@ class SampleResolution(Layer):
             shape = tf.concat([batch, tf.convert_to_tensor([self.n_dims], dtype='int32')], axis=0)
             indices = tf.stack([tf.range(0, batch[0]), tf.random.uniform(batch, 0, self.n_dims, dtype='int32')], 1)
             mask = tf.tensor_scatter_nd_update(tf.zeros(shape, dtype='bool'), indices, tf.ones(batch, dtype='bool'))
+
+        # every axis independent, plus a point mass at min_res. The switch is drawn once per call, so
+        # prob_min is a fraction of images, not of axes. Thickness stays the stock nuisance latent.
+        if self.uniform_per_axis:
+            drawn = tf.random.uniform(shape, minval=self.min_res, maxval=self.uni_hi)
+            new_resolution = K.switch(tf.squeeze(K.less(tf.random.uniform([1], 0, 1), self.prob_min)),
+                                      self.min_res_tens,
+                                      drawn)
+            if self.return_thickness:
+                return [new_resolution,
+                        tf.random.uniform(tf.shape(self.min_res_tens), self.min_res_tens, new_resolution)]
+            return new_resolution
 
         # return min resolution as tensor if min=max
         if (self.max_res_iso is None) & (self.max_res_aniso is None):
@@ -1192,10 +1221,12 @@ class IntensityAugmentation(Layer):
     :param separate_channels: whether to augment all channels separately. Default is True.
     :param prob_noise: probability to apply noise injection
     :param prob_gamma: probability to apply gamma augmentation
+    :param return_gamma: whether to also return the gamma factor applied to each image, so a head whose target
+    is read off the augmented image can account for it. Default is False.
     """
 
     def __init__(self, noise_std=0, clip=0, normalise=True, norm_perc=0, gamma_std=0, contrast_inversion=False,
-                 separate_channels=True, prob_noise=0.95, prob_gamma=1, **kwargs):
+                 separate_channels=True, prob_noise=0.95, prob_gamma=1, return_gamma=False, **kwargs):
 
         # shape attributes
         self.n_dims = None
@@ -1216,6 +1247,7 @@ class IntensityAugmentation(Layer):
         self.contrast_inversion = contrast_inversion
         self.prob_noise = prob_noise
         self.prob_gamma = prob_gamma
+        self.return_gamma = return_gamma
 
         super(IntensityAugmentation, self).__init__(**kwargs)
 
@@ -1229,7 +1261,17 @@ class IntensityAugmentation(Layer):
         config["separate_channels"] = self.separate_channels
         config["prob_noise"] = self.prob_noise
         config["prob_gamma"] = self.prob_gamma
+        config["return_gamma"] = self.return_gamma
         return config
+
+    def compute_output_shape(self, input_shape):
+        # when return_gamma is on this layer emits a second tensor, one gamma value per image and channel.
+        # without the override keras returns a single shape for two outputs and _add_inbound_node raises.
+        if not self.return_gamma:
+            return input_shape
+        n_dims = len(input_shape) - 2
+        gamma_channels = input_shape[-1] if self.separate_channels else 1
+        return [input_shape, tuple([input_shape[0]] + [1] * n_dims + [gamma_channels])]
 
     def build(self, input_shape):
         self.n_dims = len(input_shape) - 2
@@ -1305,13 +1347,17 @@ class IntensityAugmentation(Layer):
             inputs = (inputs - m) / (M - m + K.epsilon())
 
         # apply voxel-wise exponentiation with predefined probability
+        gamma_factor = None
         if self.gamma_std > 0:
-            gamma = tf.random.normal(sample_shape, stddev=self.gamma_std)
+            gamma_factor = tf.math.exp(tf.random.normal(sample_shape, stddev=self.gamma_std))
             if self.prob_gamma == 1:
-                inputs = tf.math.pow(inputs, tf.math.exp(gamma))
+                inputs = tf.math.pow(inputs, gamma_factor)
             else:
-                inputs = K.switch(tf.squeeze(K.less(tf.random.uniform([1], 0, 1), self.prob_gamma)),
-                                  tf.math.pow(inputs, tf.math.exp(gamma)), inputs)
+                # the draw is taken once and reused below, so the factor that is returned is the one that was
+                # applied. drawing it twice would hand back a gamma this image does not have.
+                rand_gamma = tf.squeeze(K.less(tf.random.uniform([1], 0, 1), self.prob_gamma))
+                inputs = K.switch(rand_gamma, tf.math.pow(inputs, gamma_factor), inputs)
+                gamma_factor = K.switch(rand_gamma, gamma_factor, tf.ones_like(gamma_factor))
 
         # apply random contrast inversion
         if self.contrast_inversion:
@@ -1323,6 +1369,12 @@ class IntensityAugmentation(Layer):
                 inverted_channel.append(tf.map_fn(self._single_invert, [channel, invert], dtype=channel.dtype))
             inputs = tf.concat(inverted_channel, -1)
 
+        if self.return_gamma:
+            if gamma_factor is None:
+                gamma_channels = (self.n_channels if self.separate_channels else 1) * self.one
+                gamma_factor = tf.ones(tf.concat([batchsize, tf.ones([self.n_dims], dtype='int32'),
+                                                  gamma_channels], 0), dtype=inputs.dtype)
+            return [inputs, gamma_factor]
         return inputs
 
     @staticmethod
