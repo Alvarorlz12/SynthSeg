@@ -197,13 +197,17 @@ def plot_validation_curves(list_validation_dirs, architecture_names=None, eval_i
 
 
 def draw_learning_curve(path_tensorboard_files, architecture_names, figsize=(11, 6), fontsize=18,
-                        y_lim=None, remove_legend=False, ylabel='Scores'):
+                        y_lim=None, remove_legend=False, ylabel='Scores', title='Learning curves',
+                        list_colours=None):
     """This function draws the learning curve of several trainings on the same graph.
     :param path_tensorboard_files: list of tensorboard files corresponding to the models to plot.
     :param architecture_names: list of the names of the models
     :param figsize: (optional) size of the figure to draw.
     :param fontsize: (optional) fontsize used for the graph.
     :param ylabel: (optional) label of the y axis. Default is 'Scores'.
+    :param title: (optional) title of the figure. Default is 'Learning curves'.
+    :param list_colours: (optional) one colour per training, so a notebook can keep the same colour for
+    the same architecture across the loss figure and the validation figures.
     """
 
     # reformat inputs
@@ -211,9 +215,11 @@ def draw_learning_curve(path_tensorboard_files, architecture_names, figsize=(11,
     architecture_names = utils.reformat_to_list(architecture_names)
     assert len(path_tensorboard_files) == len(architecture_names), 'names and tensorboard lists should have same length'
 
+    list_colours = utils.reformat_to_list(list_colours) if list_colours is not None         else [None] * len(path_tensorboard_files)
+
     # loop over architectures
     plt.figure(figsize=figsize)
-    for path_tensorboard_file, name in zip(path_tensorboard_files, architecture_names):
+    for path_tensorboard_file, name, colour in zip(path_tensorboard_files, architecture_names, list_colours):
 
         path_tensorboard_file = utils.reformat_to_list(path_tensorboard_file)
 
@@ -227,7 +233,7 @@ def draw_learning_curve(path_tensorboard_files, architecture_names, figsize=(11,
                     if v.tag == 'loss' or v.tag == 'accuracy' or v.tag == 'epoch_loss':
                         list_losses.append(v.simple_value)
                         list_epochs.append(e.step)
-        plt.plot(np.array(list_epochs), np.array(list_losses), label=name, linewidth=2)
+        plt.plot(np.array(list_epochs), np.array(list_losses), label=name, linewidth=2, color=colour)
 
     # finalise plot
     plt.grid()
@@ -238,6 +244,6 @@ def draw_learning_curve(path_tensorboard_files, architecture_names, figsize=(11,
     if y_lim is not None:
         plt.ylim(y_lim[0], y_lim[1] + 0.01)  # set right/left limits of plot
     plt.tick_params(axis='both', labelsize=fontsize)
-    plt.title('Learning curves', fontsize=fontsize)
+    plt.title(title, fontsize=fontsize)
     plt.tight_layout(pad=1)
     plt.show()
