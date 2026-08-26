@@ -10,10 +10,8 @@ deformation is on by default (the dice qc net's values); pass --no_deform for a 
 defaults to instance (train == validation == deployment). paths to the label/class arrays resolve from the
 repo root when relative.
 
-the sampler is the stock SynthSeg one (prob_min .05 / prob_iso .10 / one-aniso-axis .85), and it is spiked:
-most per-axis targets sit exactly at 1mm, which is why the breakdowns matter more than a pooled score.
-ValLoss saves pred and true every epoch in val_%03d.npz, and every breakdown is computed from those a
-posteriori.
+every axis is drawn independently from a uniform over [1 mm, max_res], with a fixed probability of a
+native volume. --synthseg_sampler restores SynthSeg's own instead.
 
 If you use this code, please cite one of the SynthSeg papers:
 https://github.com/BBillot/SynthSeg/blob/master/bibtex.bib
@@ -48,22 +46,25 @@ parser.add_argument('--generation_labels', type=str, dest='generation_labels',
                     default='data/labels_classes_priors/generation_labels.npy')
 parser.add_argument('--generation_classes', type=str, dest='generation_classes',
                     default='data/labels_classes_priors/generation_classes.npy')
-parser.add_argument('--holdout', type=int, dest='holdout', default=100)
 parser.add_argument('--neutral_labels', type=int, dest='n_neutral_labels', default=18)
 parser.add_argument('--output_shape', type=int, dest='output_shape', default=160)
 
 # resolution: the target and its regime. the defaults are SynthSeg's.
 parser.add_argument('--max_res_iso', type=float, dest='max_res_iso', default=4.)
 parser.add_argument('--max_res_aniso', type=float, dest='max_res_aniso', default=8.)
+# the sampler. per-axis independent uniform with a fixed probability of a native volume; SynthSeg's own
+# is one flag away. Report R2 WITHOUT the native draws: on the stock sampler it read 0.9764 with them and
+# 0.9044 without, because most of the points were the same value predicted almost perfectly.
+parser.add_argument('--synthseg_sampler', action='store_true', dest='synthseg_sampler',
+                    help="use SynthSeg's own resolution sampler (one shared value across the axes, or a "
+                         'single degraded axis with the other two at atlas_res) instead of one '
+                         'independent uniform draw per axis')
+# the dice qc net puts a relu on its last head conv; the tissue-means head is linear because its
+# target sits near 0.5. this target is >= 0 and is exactly 0 on a native volume, so relu fits it.
+parser.add_argument('--res_prob_min', type=float, dest='res_prob_min', default=0.2,
+                    help='probability of drawing a native volume, i.e. 1 mm isotropic. Default 0.2.')
 # 'blur_only' drops the resampling grid entirely (only the Gaussian blur cue survives); 'kernel_phase' /
 # 'kernel_random' randomise the resample kernel and sub-voxel phase. default none = stock SynthSeg.
-parser.add_argument('--grid_ablation', type=str, dest='grid_ablation', default='none',
-                    choices=['none', 'blur_only', 'kernel_random', 'kernel_phase'])
-# min-max the image again after the degradation, so the net sees it in [0,1] with the corruption inside --
-# the same thing the bias net saw, and the same thing a real scan is at deployment. --no_renorm turns it off.
-parser.add_argument('--no_renorm', action='store_true', dest='no_renorm')
-
-# other deformation and intensity (all off by default: resolution is the only corruption)
 parser.add_argument('--no_deform', action='store_true', dest='no_deform')
 parser.add_argument('--bias_std', type=float, dest='bias_field_std', default=0.)
 parser.add_argument('--bias_scale', type=float, dest='bias_scale', default=.025)
@@ -91,7 +92,6 @@ parser.add_argument('--lr', type=float, dest='lr', default=1e-4)
 parser.add_argument('--clipnorm', type=float, dest='clipnorm', default=0.)
 parser.add_argument('--epochs', type=int, dest='epochs', default=100)
 parser.add_argument('--steps_per_epoch', type=int, dest='steps_per_epoch', default=1000)
-parser.add_argument('--validation_steps', type=int, dest='validation_steps', default=100)
 parser.add_argument('--checkpoint', type=str, dest='checkpoint', default=None)
 parser.add_argument('--seed', type=int, dest='seed', default=0)
 
@@ -111,9 +111,6 @@ if args.pop('no_deform'):
     args.update(scaling_bounds=False, rotation_bounds=False, shearing_bounds=False, nonlin_std=0.,
                 flipping=False)
 
-args['renorm'] = not args.pop('no_renorm')
-if args['grid_ablation'] == 'none':
-    args['grid_ablation'] = None
 
 # translate --norm into the (batch_norm axis, instance_norm flag) the library takes. --norm is authoritative:
 # instance and none both turn batch norm off, batch reads the axis from --batch_norm.

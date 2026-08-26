@@ -11,30 +11,30 @@ resamples it back up to the 160^3 1mm grid, so the array shape never leaks the l
 'resolution' (return_resolution=True), exactly as it exposes 'bias_field_std', so this is the realised
 degradation of this image, not a knob that generated a distribution of them.
 
-the target is the resolution deficit relative to the grid the image is stored on, in log:
+the target is the resolution deficit relative to the grid the image is stored on, in millimetres:
 
-    y_k = log(s_k / atlas_res_k) / log(max_res / atlas_res_k),  clipped to [0, 1]
+    y_k = s_k - atlas_res_k
 
-log because blur is multiplicative (1 -> 2 mm is the same amount of degradation as 2 -> 4, and a linear
-target would spend the whole loss on the 4-8 mm end nobody makes decisions about); normalised to [0, 1] so
-the loss and the read-off sit on the tissue-means net's scale. this is a monotone relabelling and ValLoss
-saves pred+true raw, so mm, log-MAE or anything else is recomputed a posteriori from the npz.
+0 at native, read back as s = atlas_res + pred. millimetres and not log because millimetres are what gets
+deployed: the head is asked how far from native a scan is, and a small error in log is a large one in mm
+at the coarse end. the cost is that under mse a relative error is weighted by s^2, so the coarse end
+carries more of the loss than the fine end where the QC call is actually made.
+
+the spacing is drawn per axis, independently, from a uniform over [atlas_res, max_res], with a fixed
+probability of a native (1 mm isotropic) volume. SynthSeg's own sampler is one flag away
+(synthseg_sampler) but is off by default: it couples the axes, since a coarse axis there implies the
+other two are native, which the net can read instead of measuring the blur.
 
 three outputs and not one: unlike a bias field, resolution is intrinsically per-axis. a scan can be fine
 in-plane and coarse through-plane, and that anisotropy IS the QC case (2D multi-slice, failed recons,
-resampled-up FLAIR). k=3 is the same head width the tissue-means net ran at.
-
-the primary artefact is the per-epoch validation pred+true that ValLoss saves in val_%03d.npz, and the
-primary metric is the mse against var(target) (the score of predicting the mean). everything else --
-per-axis breakdowns, the split between native and degraded axes, calibration -- is computed a posteriori
-from those files, with no GPU and no re-run.
+resampled-up FLAIR). k=3 is one output channel per axis, the way the dice qc net has one per score.
 
 it departs from the bias-severity net in exactly three places, all forced by the target:
   1. the generator runs the randomise_res path (randomise_res=True is mandatory, return_resolution asserts
      it) and returns the drawn spacing; the bias field is off by default, so resolution is the only
      corruption.
   2. the target is a 3-vector read off the generator, not one scalar, so the head is k=3.
-  3. the image is re-normalised after the degradation (see build_generator). this is what keeps the setup
+  3. the image is re-normalised after the degradation (see build_generator). this is what keeps the
      the same one that worked for the bias field: there, labels_to_image_model applies the field and then
      min-max normalises, so the net sees an image in [0, 1] with the corruption inside it, exactly like a
      real scan normalised at deployment. for resolution the degradation happens after that normalisation
@@ -42,11 +42,14 @@ it departs from the bias-severity net in exactly three places, all forced by the
      0.74] while every deployed image arrives in [0, 1] -- an accidental difference from the bias setup,
      not a deliberate one. same principle as instance norm: train, validate and deploy the same function.
      (instance norm already absorbs much of a global scale change, so this is cheap insurance rather than
-     a large effect.) pass renorm=False to turn it off.
-the encoder, the head (max pool, two convolutions, spatial mean; the last convolution linear), the
-checkpoint guard, the ValLoss that reads the net on each image's own statistics, and the training loop are
-all imported from the tissue-means module so the three regressors cannot drift apart. instance norm is the
-deployable default here (train == validation == deployment).
+     a large effect.)
+the network is the dice qc net's, UNCHANGED: same encoder, and the same head of a max pool, two
+k-channel relu convolutions and a spatial mean. it is built in this file rather than imported from the
+tissue-means module, which departs from that head in two places this target does not want -- a wider
+first convolution and a linear last one, both of which suit a target sitting near 0.5 and never near 0.
+this one is >= 0 and is exactly 0 on a native volume, so the relu fits it as it fits a dice score. the
+checkpoint guard and the training loop are still imported. instance norm is the deployable default
+here, so the function that trains is the function that is deployed.
 
 If you use this code, please cite one of the SynthSeg papers:
 https://github.com/BBillot/SynthSeg/blob/master/bibtex.bib
@@ -77,20 +80,18 @@ from SynthSeg.model_inputs import build_model_inputs
 
 # third-party imports
 from ext.lab2im import utils
+from ext.neuron import models as nrn_models
 
-# the target swap is the only real difference, so the encoder + head, the checkpoint guard, the validation
-# callback and the training loop are the tissue-means ones, imported rather than copied so the nets can
-# never drift apart. build_regression_model with k=3 is that head with a three-channel output.
-from SynthSeg.training_tissue_means import (build_regression_model, load_weights_checked, ValLoss,
-                                            train_model)
+# the checkpoint guard, the validation callback and the training loop are the tissue-means ones, imported
+# rather than copied. the network itself is built below instead: the two targets do not want the same last
+# activation, and a shared builder would make that a change to three heads at once.
+from SynthSeg.training_tissue_means import load_weights_checked, train_model
 
 eps = 1e-6
 
-# one name per output axis, in array order. the label is a per-array-axis vector, not an anatomical one:
-# the spatial deformation rotates the anatomy inside the array before the degradation, so the degradation
-# axes are always the storage axes. mapping to RAS is a deterministic post-step at deployment, not a thing
-# the net is asked to learn.
-AXIS_NAMES = ('ax0', 'ax1', 'ax2')
+# the label is a per-array-axis vector, not an anatomical one: the spatial deformation rotates the
+# anatomy inside the array before the degradation, so the degradation axes are the storage axes.
+# mapping to RAS is a deterministic post-step at deployment, not something the net learns.
 
 
 def training(labels_dir,
@@ -99,9 +100,8 @@ def training(labels_dir,
              generation_classes,
              max_res_iso=4.,
              max_res_aniso=8.,
-             grid_ablation=None,
-             renorm=True,
-             holdout=100,
+             synthseg_sampler=False,
+             res_prob_min=0.2,
              batchsize=1,
              output_shape=160,
              flipping=True,
@@ -129,7 +129,6 @@ def training(labels_dir,
              clipnorm=0.,
              epochs=100,
              steps_per_epoch=1000,
-             validation_steps=100,
              checkpoint=None,
              seed=0):
 
@@ -142,25 +141,15 @@ def training(labels_dir,
     so the standard SynthSeg classes are used for the richest contrast randomisation.
 
     # resolution: the target and the only corruption on by default
-    :param max_res_iso: (optional) upper bound of the uniform the isotropic branch draws from, U(atlas_res,
-    max_res_iso). Default 4, the SynthSeg default. Also sets the target's normalising ceiling together with
-    max_res_aniso.
-    :param max_res_aniso: (optional) upper bound of the uniform the anisotropic branch draws from for the
-    one axis it selects. Default 8, the SynthSeg default.
-    The sampling keeps SampleResolution's stock mixture (prob_min 0.05 -> all axes native,
-    prob_iso 0.10 -> one shared value, else 0.85 -> one random axis degraded and the other two native). It
-    is spiked and axis-coupled: 62% of per-axis targets sit exactly at atlas_res and 0% of images have
-    exactly two degraded axes.
-    :param grid_ablation: (optional) None keeps the stock resampling. 'blur_only' skips MimicAcquisition so
-    only the Gaussian blur cue survives; 'kernel_phase' / 'kernel_random' randomise the resample kernel and
-    sub-voxel grid phase. Default None (stock SynthSeg behaviour).
-    :param renorm: (optional) re-apply a per-image min-max after the degradation, so the encoder sees an
-    image in [0, 1] with the corruption inside it -- the same thing the bias run's net saw, and the same
-    thing a real scan normalised at deployment is. Default True. See the module docstring.
-
-    :param holdout: (optional) number of label maps kept out of training, the anatomy the validation loss is
-    measured on. Deterministic split on the sorted paths, so the eval scripts agree on which maps were never
-    seen: change it in both. Default 100.
+    :param max_res_iso: (optional) upper bound of the per-axis uniform. Default 4, the SynthSeg default.
+    :param max_res_aniso: (optional) upper bound for the axis the stock anisotropic branch selects.
+    Default 8, the SynthSeg default. The per-axis sampler draws from the larger of the two bounds.
+    :param res_prob_min: (optional) probability of drawing the native resolution on every axis, i.e. of a
+    1 mm isotropic volume. Default 0.2.
+    :param synthseg_sampler: (optional) fall back to SynthSeg's own sampler, which either shares one
+    value across the axes or degrades a single axis and pins the other two at atlas_res. Off by default:
+    that coupling means a coarse axis implies the others are native, which the net can read instead of
+    measuring the blur, and it leaves 62.8% of per-axis targets sitting on exactly 1 mm.
     :param batchsize: (optional) images per minibatch. Default 1.
     :param output_shape: (optional) shape of the cropped output image. Default 160.
 
@@ -201,8 +190,6 @@ def training(labels_dir,
     :param clipnorm: (optional) gradient norm clipping, 0 to turn it off. Default 0.
     :param epochs: (optional) number of epochs. Default 100.
     :param steps_per_epoch: (optional) steps per epoch (how often the model is saved). Default 1000.
-    :param validation_steps: (optional) images drawn from the held-out maps at each epoch end for a val_loss.
-    0 turns it off. Default 100.
     :param checkpoint: (optional) path of a saved model to resume from.
     :param seed: (optional) random seed. Default 0.
     """
@@ -212,12 +199,9 @@ def training(labels_dir,
     gen_classes = np.asarray(utils.load_array_if_path(generation_classes)).astype('int32')
     assert max(max_res_iso, max_res_aniso) > 0, 'the resolution range is the target of this regressor'
 
-    # hold a few maps out of training. deterministic split on the sorted paths, so training and the eval
-    # scripts agree on which maps were never seen.
-    labels_paths = sorted(utils.list_images_in_folder(labels_dir))
-    n_hold = min(max(holdout, 0), len(labels_paths) - 1)
-    train_paths = labels_paths[:len(labels_paths) - n_hold] if n_hold else labels_paths
-    val_paths = labels_paths[len(labels_paths) - n_hold:] if n_hold else []
+    # every map in labels_dir trains. the split is frozen on disk and labels_dir is the training
+    # partition already, so carving a second one out here would only shrink it.
+    train_paths = sorted(utils.list_images_in_folder(labels_dir))
 
     # a resumed job draws a fresh stream but stays reproducible
     init_epoch = 0 if checkpoint is None else int(os.path.basename(checkpoint).split('rs_')[1][:-3])
@@ -231,57 +215,42 @@ def training(labels_dir,
     generator = build_generator(labels_shape, atlas_res, gen_labels, output_shape, 2 ** n_levels,
                                 n_neutral_labels, scaling_bounds, rotation_bounds, shearing_bounds,
                                 translation_bounds, nonlin_std, nonlin_scale, max_res_iso, max_res_aniso,
-                                grid_ablation, renorm, bias_field_std, bias_scale, gamma_std, clip, flipping)
+                                bias_field_std, bias_scale, gamma_std, clip, flipping,
+                                res_uniform_per_axis=not synthseg_sampler,
+                                res_prob_min=res_prob_min)
     image_shape = generator.outputs[0].get_shape().as_list()[1:]
 
-    # target and prediction. k=3: one spacing per array axis. the head is the tissue-means head, unchanged.
+    # target and prediction. k=3: one spacing per array axis.
     y_pred = build_regression_model(generator, image_shape, 3, n_levels, nb_conv_per_level, conv_size,
-                                    unet_feat_count, feat_multiplier, activation, batch_norm, use_residuals,
-                                    instance_norm)
+                                    unet_feat_count, feat_multiplier, activation, batch_norm,
+                                    use_residuals, instance_norm)
     res_max = float(max(max_res_iso, max_res_aniso))
-    y_true = build_target(generator, atlas_res, res_max)
-    # the tissue-means ValLoss/probe carry a per-tissue 'present' count that gates its loss; there is no such
-    # gate here (an axis always has a resolution), so a constant-ones stand-in keeps the probe signature and
-    # the saved npz shape identical without changing anything.
-    present = KL.Lambda(lambda s: K.ones_like(s), name='rs_present')(y_true)
+    y_true = build_target(generator, atlas_res)
     loss = build_loss(y_true, y_pred)
     regression_model = models.Model(generator.inputs, loss)
-
-    # a second read of the same graph (same layer objects, same weights) exposing the prediction, the target
-    # and the loss, so ValLoss can report the graph's own mse and keep pred/true per epoch.
-    val_probe = models.Model(generator.inputs, [y_pred, y_true, present, loss])
     n_train = int(np.sum([K.count_params(w) for w in regression_model.trainable_weights]))
-    print('regressing per-axis spacing  log(s / %s) / log(%.1f) in [0, 1]   trainable params: %d'
-          % (np.array(atlas_res), res_max, n_train))
 
-    # input generators. the held-out maps feed a val_loss at each epoch end: every image is drawn fresh, so
-    # the loss is already out of sample in contrast and the held-out maps only add unseen anatomy.
-    def make_generator(paths):
-        model_inputs = build_model_inputs(path_label_maps=paths, n_labels=len(gen_labels),
-                                          batchsize=batchsize, n_channels=1,
-                                          generation_classes=gen_classes, prior_distributions='uniform')
-        return utils.build_training_generator(model_inputs, batchsize)
+    model_inputs = build_model_inputs(path_label_maps=train_paths, n_labels=len(gen_labels),
+                                      batchsize=batchsize, n_channels=1,
+                                      generation_classes=gen_classes, prior_distributions='uniform')
+    input_generator = utils.build_training_generator(model_inputs, batchsize)
 
-    input_generator = make_generator(train_paths)
-    n_val = validation_steps if (val_paths and validation_steps > 0) else 0
-    val_generator = make_generator(val_paths) if n_val else None
-    print('  label maps: %d for training, %d held out   validation steps: %d' %
-          (len(train_paths), len(val_paths), n_val))
-    print('  max_res_iso %.2f   max_res_aniso %.2f   grid_ablation %s   renorm %s   bias_field_std %.2f'
-          % (max_res_iso, max_res_aniso, grid_ablation or 'none', renorm, bias_field_std))
-    print('  sampling: SampleResolution stock mixture (prob_min .05 / prob_iso .10 / single-aniso-axis .85);'
-          ' ~62% of per-axis targets sit exactly at atlas_res.')
+    print('regressing per-axis spacing s - %s in mm   %d label maps   %d params'
+          % (np.array(atlas_res), len(train_paths), n_train))
+    print('  max_res_iso %.2f  max_res_aniso %.2f  prob_native %.2f  sampler %s  bias_field_std %.2f'
+          % (max_res_iso, max_res_aniso, res_prob_min,
+             'synthseg' if synthseg_sampler else 'uniform-per-axis', bias_field_std))
 
-    # 'ax0/ax1/ax2' name the three channels in the printed lines and the saved npz; prefix 'rs' names the
-    # checkpoints rs_###.h5 (tissue-means defaults to tm_###.h5, bias uses bf_###.h5).
+    # prefix 'rs' names the checkpoints rs_###.h5 (tissue-means uses tm_###.h5, bias bf_###.h5).
     train_model(regression_model, input_generator, lr, epochs, steps_per_epoch, model_dir, checkpoint,
-                init_epoch, clipnorm, val_generator, n_val, val_probe, list(AXIS_NAMES), prefix='rs')
+                init_epoch, clipnorm, prefix='rs')
 
 
 def build_generator(labels_shape, atlas_res, generation_labels, output_shape, output_div_by_n,
                     n_neutral_labels, scaling_bounds, rotation_bounds, shearing_bounds, translation_bounds,
-                    nonlin_std, nonlin_scale, max_res_iso, max_res_aniso, grid_ablation, renorm,
-                    bias_field_std, bias_scale, gamma_std, clip, flipping=True):
+                    nonlin_std, nonlin_scale, max_res_iso, max_res_aniso,
+                    bias_field_std, bias_scale, gamma_std, clip, flipping=True,
+                    res_uniform_per_axis=True, res_prob_min=0.2):
 
     # randomise_res=True is what draws the spacing at all, and return_resolution asserts it. return_bias_std
     # is pinned False so 'resolution' lands at outputs[2] (labels_to_image_model appends 'bias_field_std'
@@ -295,13 +264,10 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
                                shearing_bounds=shearing_bounds, translation_bounds=translation_bounds,
                                nonlin_std=nonlin_std, nonlin_scale=nonlin_scale,
                                randomise_res=True, max_res_iso=max_res_iso, max_res_aniso=max_res_aniso,
-                               grid_ablation=grid_ablation,
+                               res_uniform_per_axis=res_uniform_per_axis, res_prob_min=res_prob_min,
                                bias_field_std=bias_field_std, bias_scale=bias_scale,
                                intensity_gamma_std=gamma_std, intensity_clip=clip,
                                return_bias_std=False, return_resolution=True)
-
-    if not renorm:
-        return gen
 
     # re-normalise after the degradation. labels_to_image_model runs IntensityAugmentation(normalise=True)
     # Before the blur/resample block, so in training the volume enters the degradation at exactly [0, 1] and
@@ -320,25 +286,46 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
     return models.Model(gen.inputs, [image] + gen.outputs[1:])
 
 
-def build_target(generator, atlas_res, res_max):
+def build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_level, conv_size, feat_count,
+                           feat_multiplier, activation, batch_norm, use_residuals, instance_norm=False):
 
-    # the drawn per-axis spacing, exposed by the generator as its third output ('resolution', shape [B, 3]),
-    # turned into a resolution deficit relative to the grid the image is stored on, on a [0, 1] scale:
-    #     y_k = log(s_k / atlas_res_k) / log(res_max / atlas_res_k)
-    # log because blur is multiplicative: 1 -> 2 mm and 2 -> 4 mm are the same amount of degradation, and a
-    # linear target would put most of its dynamic range in the 4-8 mm end where the image is already
-    # unusable and nobody makes a QC call. atlas_res -> 0 and res_max -> 1, and the clip only catches
-    # floating-point overshoot at the ends (SampleResolution cannot draw outside [atlas_res, res_max]).
-    # monotone relabelling: ValLoss saves pred and true raw, so mm / log-MAE / per-bin metrics are all
-    # recomputed a posteriori from val_%03d.npz without re-running anything.
-    res = generator.outputs[2]
-    lo = np.asarray(utils.reformat_to_list(atlas_res, length=3, dtype='float'), dtype='float32')
-    denom = np.log(np.maximum(res_max / lo, 1. + eps)).astype('float32')
+    # the dice qc net's encoder and head, unchanged: conv encoder, max pool, two k-channel relu
+    # convolutions, average over space, which keeps the location until the output. Written out here
+    # rather than imported from the tissue-means module because that one departs from it in two places
+    # this head does not want, and a shared builder would make either change a change to three heads.
+    enc = nrn_models.conv_enc(input_model=generator, input_shape=image_shape, nb_levels=n_levels,
+                              conv_size=conv_size, nb_features=feat_count, feat_mult=feat_multiplier,
+                              nb_conv_per_level=nb_conv_per_level, activation=activation,
+                              batch_norm=batch_norm, instance_norm=instance_norm,
+                              use_residuals=use_residuals, name='rs_enc')
+    last = enc.outputs[0]
+    conv_kwargs = {'padding': 'same', 'activation': 'relu', 'data_format': 'channels_last'}
+    last = KL.MaxPool3D(pool_size=(2, 2, 2), padding='same', name='rs_conv_pool')(last)
+    # k channels in BOTH head convs, both relu: the dice qc net's head unchanged, so there is nothing to
+    # declare about it. It emits one channel per regressed score and so does this, one per array axis.
+    # The tissue-means head widens the first conv to max(16, k) and leaves the last one linear, because
+    # its target sits near 0.5 and never near 0: a relu there would price in a floor the target never
+    # touches, and a channel whose map starts out all negative would have mean exactly 0, gradient exactly
+    # 0, and never recover. This target is >= 0 and is exactly 0 on a native volume, a fifth of them, so
+    # the relu fits it the same way it fits a dice score.
+    # NOTE a checkpoint records neither the last activation nor the widths, so keep runs that differ in
+    # them in separate model directories.
+    last = KL.Conv3D(k, kernel_size=5, **conv_kwargs, name='rs_conv0')(last)
+    last = KL.Conv3D(k, kernel_size=5, **conv_kwargs, name='rs_conv1')(last)
+    return KL.Lambda(lambda x: tf.reduce_mean(x, axis=[1, 2, 3]), name='rs_pred')(last)
 
-    def fn(s):
-        return K.clip(tf.math.log(K.maximum(s / lo, eps)) / denom, 0., 1.)
 
-    return KL.Lambda(fn, name='rs_target')(res)
+def build_target(generator, atlas_res):
+
+    # the drawn per-axis spacing, exposed by the generator as its third output ("resolution",
+    # shape [B, 3]), as a deficit in millimetres relative to the grid the image is stored on:
+    #     y_k = s_k - atlas_res_k
+    # 0 at native, and read back as s = atlas_res + pred. Under MSE this weights a relative error
+    # by s^2, so the coarse end carries more of the loss than the fine one; the fine end is where
+    # the QC call is made, but it is also where a millimetre of error matters least in absolute
+    # terms, which is the quantity being deployed.
+    lo = np.asarray(utils.reformat_to_list(atlas_res, length=3, dtype="float"), dtype="float32")
+    return KL.Lambda(lambda s: s - lo, name="rs_target")(generator.outputs[2])
 
 
 def build_loss(y_true, y_pred):
