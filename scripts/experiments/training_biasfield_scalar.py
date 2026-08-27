@@ -3,8 +3,10 @@ Thin launcher for the bias-field severity regressor, mirroring scripts/experimen
 
     python scripts/experiments/training_biasfield_scalar.py <labels_dir> <model_dir> [options]
 
-regresses one scalar per image: the realised bias severity std_log = std(log B) over the brain, normalised
-to [0, 1] by --std_log_max. the bias field is the target and the only intensity corruption on by default;
+regresses one scalar per image: the bias severity that survives into the image, std_log, in its own units.
+--std_log_max is the plausibility threshold for reading a prediction, not a divisor, so nothing is clipped
+and two runs that disagree on it stay comparable. the bias field is the target and the only intensity
+corruption on by default;
 --bias_prob leaves a fraction of images clean (target 0). deformation is on by default (the dice qc net's
 values); pass --no_deform for a local cpu smoke. --norm defaults to instance (train == validation ==
 deployment). paths to the label/class arrays resolve from the repo root when relative.
@@ -57,6 +59,12 @@ parser.add_argument('--no_deform', action='store_true', dest='no_deform')
 parser.add_argument('--randomise_res', action='store_true', dest='randomise_res')
 parser.add_argument('--gamma_std', type=float, dest='gamma_std', default=0.)
 parser.add_argument('--clip', type=int, dest='clip', default=0)
+# --qc_head uses the dice qc net's head verbatim (k channels in both head convs, relu on both) instead of the
+# tissue-means one (16 channels, then a LINEAR conv). That linear conv was argued for the tissue-means target,
+# which sits near 0.5 and never reaches 0; std(B) is >= 0 and is exactly 0 on the ~10% of images bias_prob
+# leaves clean. Turn it on with --norm batch: the head deviation is what the July run confounded batch norm
+# with. The layer names differ, so a checkpoint from the other head is refused rather than half-loaded.
+parser.add_argument('--qc_head', action='store_true', dest='qc_head')
 
 # architecture (defaults are the dice qc net's; n_levels sets the downsampling, output_shape only the fov)
 parser.add_argument('--n_levels', type=int, dest='n_levels', default=5)

@@ -277,7 +277,7 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
 
 
 def build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_level, conv_size, feat_count,
-                           feat_multiplier, activation, batch_norm, use_residuals, instance_norm=False):
+                           feat_multiplier, activation, batch_norm, use_residuals, instance_norm=False, qc_head=False):
 
     # conv encoder on the image, then the dice-qc head: max pool, two convolutions, and average over space,
     # which keeps the location until the output.
@@ -289,6 +289,19 @@ def build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_leve
     last = enc.outputs[0]
     conv_kwargs = {'padding': 'same', 'activation': 'relu', 'data_format': 'channels_last'}
     last = KL.MaxPool3D(pool_size=(2, 2, 2), padding='same', name='tm_conv_pool')(last)
+
+    # qc_head keeps the dice qc net's head EXACTLY: k channels in both convolutions and relu on both. That is
+    # the right head whenever the target is >= 0 and 0 is a value it really takes -- a dice score, the
+    # resolution deficit (0 on a native volume), the bias severity std(B) (exactly 0 on the ~10% of images the
+    # bias draw skips). The two deviations in the else branch were argued for the tissue-means target alone,
+    # which sits near 0.5 and never reaches 0; carrying them to a dice-shaped target changes the net for
+    # nothing. Distinct layer names on purpose: a checkpoint from the other head then has layers with nowhere
+    # to go and load_weights_checked refuses it out loud instead of loading half a net.
+    if qc_head:
+        last = KL.Conv3D(k, kernel_size=5, **conv_kwargs, name='tm_qc_conv0')(last)
+        last = KL.Conv3D(k, kernel_size=5, **conv_kwargs, name='tm_qc_conv1')(last)
+        return KL.Lambda(lambda x: tf.reduce_mean(x, axis=[1, 2, 3]), name='tm_pred')(last)
+
     # the head's first convolution is the one place it is wider than the dice qc net's, which emits one
     # channel per label in both of its head convs: tying ours to k the same way would make it a rank-1
     # readout whenever a single tissue is regressed.

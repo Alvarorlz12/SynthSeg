@@ -4,18 +4,22 @@ Trains a scalar regressor to read the realised bias-field severity of the synthe
 per-tissue mean regressor (SynthSeg/training_tissue_means.py) with the target swapped: three tissue means
 become one severity scalar, and nothing else changes.
 
-the severity is std_log = std(log B) over the whole image (all voxels of the crop, no brain mask), the
-standard deviation of the log bias field. it is computed inside the generation graph by labels_to_image_model
-(return_bias_std=True with bias_std_masked=False exposes the named layer 'bias_field_std' = _whole_std(log_bias)),
-so it is the severity of the field that was actually drawn and applied to this image, not the knob that
-generated it: two images at the same bias_field_std knob get different std_log, and each is labelled by its
-own. this is the same move the tissue-means net makes when it regresses the effective mean of the image rather
-than the drawn gaussian mean. the whole-image (mask-free) measure is the one a QC head can reproduce at
-deployment with no segmentation, and it is defined even on a crop that misses the brain.
+the severity is std_log, the standard deviation of the log bias field over the whole crop with no brain mask.
+it is computed inside the generation graph by labels_to_image_model (return_bias_std=True exposes the
+named layer 'bias_field_std' = _whole_std, the std of the sampled log-field over the crop), so it is
+the field that survives into the image, not the knob that generated it and not the field that was drawn: the
+clip attenuates the field and the gamma scales the log domain by its own factor, and the two together share
+only about a third of the variance with the drawn field. two images at the same bias_field_std knob get
+different std_log, and each is labelled by its own. this is the same move the tissue-means net makes when it
+regresses the effective mean of the image rather than the drawn gaussian mean. the mask-free measure is the
+one a QC head can reproduce at deployment with no segmentation, and it is defined even on a crop that misses
+the brain.
 
-the target is normalised to [0, 1] by a fixed ceiling std_log_max (the largest plausible severity: with
-bias_field_std = 1 the realised std_log tops out around 0.65), so
-the loss and the read-off sit on the tissue-means net's scale: label = clip(std_log / std_log_max, 0, 1).
+the target is std_log itself, in its own units, with no ceiling and no [0, 1] rescaling. a divisor would only
+change the unit and could be undone afterwards, but the clip that used to go with it could not: it mapped
+every image past the ceiling to the same label and threw away the severe end, which is the end that matters.
+std_log_max survives as the read-off threshold (the largest plausible severity), printed and recorded but
+never applied to the target, so it can be revised without retraining and runs stay comparable across it.
 
 a fraction (1 - bias_prob) of the images get no bias field at all, so label 0 is a value the target really
 takes and the net is asked to certify clean, not only to rank severity. that fraction is honest only because
@@ -111,6 +115,7 @@ def training(labels_dir,
              epochs=100,
              steps_per_epoch=1000,
              validation_steps=100,
+             qc_head=False,
              checkpoint=None,
              seed=0):
 
@@ -124,10 +129,10 @@ def training(labels_dir,
     randomisation rather than the 3-tissue grouping.
 
     # bias field: the target and the only intensity corruption on by default
-    :param std_log_max: (optional) ceiling that normalises the target to [0, 1]: label = clip(std_log /
-    std_log_max, 0, 1). The largest plausible realised severity. Default 0.65: at bias_field_std = 1 the
-    realised std_log averages ~0.58 and reaches ~0.68 at the top of the field-pattern band. A train-time
-    knob, not baked into the graph.
+    :param std_log_max: (optional) the largest plausible severity, read off the severity grid of
+    experiments/25_target_range_extra_cerebral.ipynb. It is recorded and printed but never applied to the
+    target, which stays in its own units, so it can be revised later without retraining and two runs that
+    disagree on it are still comparable. Default 0.65.
     :param bias_field_std: (optional) max std of the normal the small bias tensor is sampled from; the layer
     draws sigma ~ U(0, bias_field_std) per image. Default 1.0. Set to 0 and there is no target.
     :param bias_prob: (optional) probability of applying the sampled field; the rest are left bias-free with
@@ -187,8 +192,22 @@ def training(labels_dir,
     # prepare labels
     gen_labels = np.asarray(utils.load_array_if_path(generation_labels)).astype('int32')
     gen_classes = np.asarray(utils.load_array_if_path(generation_classes)).astype('int32')
+    # RandomFlip splits generation_labels into [neutral | left | right] and pairs left[i] with right[i]
+    # (layers.py:382-384). It uses int((n_labels - n_neutral) / 2), which TRUNCATES: an odd remainder
+    # silently misaligns the pairing, so ~50% of images get structures swapped into the wrong tissue
+    # class with no exception raised, on CPU and on GPU alike. That is the failure mode you hit if you
+    # pass a longer generation_labels (e.g. the extra-cerebral array with label 531) and forget to bump
+    # --neutral_labels to match. Fail loudly instead.
+    assert (len(gen_labels) - n_neutral_labels) % 2 == 0, \
+        'generation_labels has %d entries and n_neutral_labels is %d, leaving %d lateral labels, which ' \
+        'is odd. Left and right must pair up. Did you pass a different generation_labels without ' \
+        'updating --neutral_labels?' % (len(gen_labels), n_neutral_labels,
+                                        len(gen_labels) - n_neutral_labels)
+    assert len(gen_labels) == len(gen_classes), \
+        'generation_labels (%d) and generation_classes (%d) must have the same length; they are paired ' \
+        'positionally.' % (len(gen_labels), len(gen_classes))
     assert bias_field_std > 0, 'bias_field_std must be > 0, it is the target of this regressor'
-    assert std_log_max > 0, 'std_log_max normalises the target, it must be > 0'
+    assert std_log_max > 0, 'std_log_max is the read-off threshold, it must be > 0'
 
     # hold a few maps out of training. deterministic split on the sorted paths, so training and the eval
     # scripts agree on which maps were never seen.
@@ -210,10 +229,15 @@ def training(labels_dir,
                                 max_res_aniso, bias_field_std, bias_prob, bias_scale, gamma_std, clip, flipping)
     image_shape = generator.outputs[0].get_shape().as_list()[1:]
 
-    # target and prediction. k=1: one scalar. the head is the tissue-means head with a one-channel output.
+    # target and prediction. k=1: one scalar.
+    # qc_head=True is the dice qc net's head verbatim (k channels in both convs, relu on both) instead of the
+    # tissue-means one (16 channels then a LINEAR conv). The linear last conv was argued for the tissue-means
+    # target, which sits near 0.5 and never reaches 0. This target is std(B): >= 0, and exactly 0 on the ~10%
+    # of images bias_prob leaves clean -- the dice-score shape the relu head is built for. It also matters for
+    # --norm batch, where the head deviation is what the July tissue-means run confounded batch norm with.
     y_pred = build_regression_model(generator, image_shape, 1, n_levels, nb_conv_per_level, conv_size,
                                     unet_feat_count, feat_multiplier, activation, batch_norm, use_residuals,
-                                    instance_norm)
+                                    instance_norm, qc_head=qc_head)
     y_true = build_target(generator, std_log_max)
     # the tissue-means ValLoss/probe carry a per-tissue 'present' count that gates its loss; there is no such
     # gate here (a severity is always present), so a constant-ones stand-in keeps the probe signature and the
@@ -226,7 +250,8 @@ def training(labels_dir,
     # and the loss, so ValLoss can report the graph's own mse and keep pred/true per epoch.
     val_probe = models.Model(generator.inputs, [y_pred, y_true, present, loss])
     n_train = int(np.sum([K.count_params(w) for w in regression_model.trainable_weights]))
-    print('regressing bias severity  std_log / %.3f in [0, 1]   trainable params: %d' % (std_log_max, n_train))
+    print('regressing bias severity  std_log in its own units, read-off threshold %.3f   trainable params: %d'
+          % (std_log_max, n_train))
 
     # input generators. the held-out maps feed a val_loss at each epoch end: every image is drawn fresh, so
     # the loss is already out of sample in contrast and the held-out maps only add unseen anatomy.
@@ -270,21 +295,21 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
                                  nonlin_std=nonlin_std, nonlin_scale=nonlin_scale,
                                  randomise_res=randomise_res, max_res_iso=max_res_iso,
                                  max_res_aniso=max_res_aniso, bias_field_std=bias_field_std,
-                                 bias_scale=bias_scale, bias_prob=bias_prob, bias_std_masked=False,
+                                 bias_scale=bias_scale, bias_prob=bias_prob,
                                  intensity_gamma_std=gamma_std, intensity_clip=clip,
                                  return_bias_std=True, return_resolution=False)
 
 
 def build_target(generator, std_log_max):
 
-    # the realised severity std_log = std(log B) over the whole image, exposed by the generator as its third
-    # output ('bias_field_std', shape [batch, 1]), normalised to [0, 1] by the plausibility ceiling. clip so
-    # the rare tail past the ceiling saturates at 1 rather than pushing the target out of range. because the
-    # std is mask-free (bias_std_masked=False), target 0 means genuinely no bias field was applied (the
-    # bias_prob clean fraction); a crop that misses the brain is not a degenerate 0 (that was the _masked_std
-    # failure mode this measure avoids).
+    # the severity that survives into the image, exposed by the generator as its third output
+    # ('bias_field_std', shape [batch, 1]). it is used as it comes: std_log_max is the read-off threshold and
+    # is not applied here, so nothing is truncated and a prediction stays in physical units. because the std
+    # is mask-free, target 0 means genuinely no bias field was applied (the bias_prob clean fraction); a crop
+    # that misses the brain is not a degenerate 0 (that was the _masked_std failure mode this measure avoids).
+    # the identity keeps the layer name, which ValLoss and the saved npz keys go by.
     std_log = generator.outputs[2]
-    return KL.Lambda(lambda s: K.clip(s / std_log_max, 0., 1.), name='bf_target')(std_log)
+    return KL.Lambda(lambda s: s, name='bf_target')(std_log)
 
 
 def build_loss(y_true, y_pred):
