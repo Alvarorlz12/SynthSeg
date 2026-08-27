@@ -287,7 +287,7 @@ def make_generator(a, gen_labels, labels_shape, atlas_res, output_div):
                                  scaling_bounds=False, rotation_bounds=False, shearing_bounds=False,
                                  translation_bounds=False, nonlin_std=0,
                                  randomise_res=True, max_res_iso=a.max_res_iso, max_res_aniso=a.max_res_aniso,
-                                 grid_ablation=a.grid_ablation, bias_field_std=0, return_resolution=True)
+                                 bias_field_std=0, return_resolution=True)
 
 
 def main():

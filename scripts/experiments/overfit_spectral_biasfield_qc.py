@@ -53,8 +53,23 @@ from keras.optimizers import Adam
 import keras.layers as KL
 import keras.backend as K
 
-from SynthSeg.labels_to_image_model import labels_to_image_model, _masked_std
+from SynthSeg.labels_to_image_model import labels_to_image_model
 from SynthSeg.model_inputs import build_model_inputs
+
+
+def _masked_std(args):
+    """std of B(x) over non-background voxels. Returns [batch, 1].
+
+    Was labels_to_image_model._masked_std until the generator was cut back to the
+    single _whole_std target and this went with it. It is kept here, local to the per-voxel field
+    probes, because their score IS the masked std of the reconstructed field."""
+    field, labels = args
+    mask = tf.cast(tf.not_equal(labels, 0), field.dtype)
+    axes = [1, 2, 3]
+    n = tf.reduce_sum(mask, axis=axes) + 1e-8
+    mean = tf.reduce_sum(field * mask, axis=axes) / n
+    mean2 = tf.reduce_sum(tf.square(field) * mask, axis=axes) / n
+    return tf.sqrt(tf.maximum(mean2 - mean * mean, 0.0))
 from SynthSeg import metrics_model as metrics
 from ext.lab2im import utils
 from ext.neuron import models as nrn_models
@@ -140,7 +155,7 @@ class InverseDCT3D(KL.Layer):
 
 
 def make_generator(a, gen_labels, labels_shape, atlas_res, output_div):
-    """Build the labels_to_image_model generator (return_bias_std=True exposes 'bias_field_log', 'bias_mask_labels'
+    """Build the labels_to_image_model generator (return_bias_std=True exposes 'bias_field_log'
     and 'bias_field_std' as named layers)."""
     return labels_to_image_model(labels_shape=labels_shape, n_channels=1,
                                  generation_labels=gen_labels, output_labels=gen_labels,
@@ -292,8 +307,11 @@ def main():
     head_model = build_spectral_head(a, image_shape, bn)
     pred_field = head_model(generator.outputs[0])                  # compose on the generator image (shares weights)
     gt_field = generator.get_layer('bias_field_log').output
-    mask_labels = generator.get_layer('bias_mask_labels').output
-    true_std = generator.get_layer('bias_field_std').output        # masked std of GT log-field over labels!=0 [B,1]
+    # outputs[1] are the labels the generator emits; with output_labels == generation_labels the
+    # ConvertLabels map is the identity, so labels != 0 is the same mask the removed
+    # 'bias_mask_labels' layer exposed, at the same shape (crop_shape == output_shape here).
+    mask_labels = generator.outputs[1]
+    true_std = generator.get_layer('bias_field_std').output        # _whole_std of the GT log-field [B,1]
 
     # in-graph loss: masked (brain) + demeaned (shape only) L2, the recipe the working U-Net uses. The field is still
     # output over the whole volume (grid upsample fills the FOV); only the supervision is masked.

@@ -13,7 +13,7 @@ Precedent: Kanakaraj 2024 "DeepN4", a SynthSeg-family 3D U-Net estimating the lo
 loss, log-space. Here we have the exact ground-truth field in-graph, so supervision is direct.
 
 Requires labels_to_image_model to expose the field + mask as named layers 'bias_field_log' and
-'bias_mask_labels' (added alongside 'bias_field_std').
+the labels output (outputs[1]), used as the brain mask.
 
 Frozen-anatomy protocol (same as overfit_biasfield_qc.py): freeze --k anatomy tuples, only the in-graph
 bias sigma varies; PHASE 0 probe at init, PHASE 1 overfit, PHASE 2 probe post-training.
@@ -45,8 +45,23 @@ from keras.optimizers import Adam
 import keras.layers as KL
 import keras.backend as K
 
-from SynthSeg.labels_to_image_model import labels_to_image_model, _masked_std
+from SynthSeg.labels_to_image_model import labels_to_image_model
 from SynthSeg.model_inputs import build_model_inputs
+
+
+def _masked_std(args):
+    """std of B(x) over non-background voxels. Returns [batch, 1].
+
+    Was labels_to_image_model._masked_std until the generator was cut back to the
+    single _whole_std target and this went with it. It is kept here, local to the per-voxel field
+    probes, because their score IS the masked std of the reconstructed field."""
+    field, labels = args
+    mask = tf.cast(tf.not_equal(labels, 0), field.dtype)
+    axes = [1, 2, 3]
+    n = tf.reduce_sum(mask, axis=axes) + 1e-8
+    mean = tf.reduce_sum(field * mask, axis=axes) / n
+    mean2 = tf.reduce_sum(tf.square(field) * mask, axis=axes) / n
+    return tf.sqrt(tf.maximum(mean2 - mean * mean, 0.0))
 from SynthSeg import metrics_model as metrics
 from ext.lab2im import utils
 from ext.lab2im.layers import GaussianBlur
@@ -255,7 +270,10 @@ def run_null_test(a, gen_labels, gen_classes, labels_paths, labels_shape, atlas_
     assert len(src_w) == len(dst_w), 'null-test weight-count mismatch (%d vs %d)' % (len(src_w), len(dst_w))
     null_model.set_weights(src_w)
 
-    null_labels = null_gen.get_layer('bias_mask_labels').output
+    # outputs[1] are the labels the generator emits; with output_labels == generation_labels the
+    # ConvertLabels map is the identity, so labels != 0 is the same mask the removed
+    # 'bias_mask_labels' layer exposed, at the same shape (crop_shape == output_shape here).
+    null_labels = null_gen.outputs[1]
     null_mask = KL.Lambda(_brain_mask_from_labels, name='brain_mask_null')(null_labels) if a.brain_mask else null_labels
     null_pred = null_model.outputs[0]
     null_score = KL.Lambda(reduce_fn, name='null_score')([null_pred, null_mask])
@@ -466,7 +484,7 @@ def main():
         pred_field = field_model.outputs[0]                        # [B,160,160,160,1]
 
     gt_field = generator.get_layer('bias_field_log').output
-    mask_labels = generator.get_layer('bias_mask_labels').output
+    mask_labels = generator.outputs[1]                         # see the note on outputs[1] above
     # active mask = whole-head (labels!=0, default) or cerebral-only (--brain-mask). Under --brain-mask the std
     # target is recomputed over the brain too, so target+loss+score all live on the same region (a coherent A/B).
     if a.brain_mask:

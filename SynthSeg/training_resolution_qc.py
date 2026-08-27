@@ -14,7 +14,7 @@ is computed in-graph and returned as the model output, so it is compiled with me
 
 Defaults: no_context=True (the conv-encoder global context drowns the 4 directional features and collapses
 the head to the min_res mode), degraded_weight=4.0 (soft hurdle against the ~62% min_res point mass),
-lr=3e-4. grid_ablation='none' is the full nearest-down / linear-up pipeline.
+lr=3e-4.
 
 Clone of training_biasfield_qc.py with the regression target swapped (bias_std to per-axis
 resolution) and the head replaced by the shared directional regressor.
@@ -64,7 +64,6 @@ def training(labels_dir,
              # resolution sampling (the in-graph label)
              max_res_iso=4.0,
              max_res_aniso=8.0,
-             grid_ablation='none',
              # content-anisotropy augmentation: random per-axis intrinsic Gaussian low-pass (sigma ~ U(0, this)
              # voxels) on the clean image, decorrelated from the resolution label, so the head can no longer read
              # absolute per-axis content smoothness as resolution. 0 = off.
@@ -128,10 +127,6 @@ def training(labels_dir,
     # resolution / label parameters
     :param max_res_iso: (optional) upper bound of the isotropic LR draw U(min_res, this). Default 4.0.
     :param max_res_aniso: (optional) upper bound of the single-axis anisotropic LR draw. Default 8.0.
-    :param grid_ablation: (optional) 'none' (full pipeline, default), 'blur_only', 'kernel_random' or
-    'kernel_phase', the resampling-grid-cheat ablations (the sim-to-real lever).
-
-    # loss parameters
     :param huber_delta: (optional) Huber transition on the normalized log-spacing label (label units in
     [0,1]; 0.1 ~= 23% of spacing). Default 0.1.
     :param degraded_weight: (optional) up-weight the per-axis loss of degraded (high-spacing) axes by
@@ -195,7 +190,7 @@ def training(labels_dir,
                                       aff=np.eye(4), scaling_bounds=False, rotation_bounds=False,
                                       shearing_bounds=False, translation_bounds=False, nonlin_std=0, **reorient_kw,
                                       randomise_res=True, max_res_iso=max_res_iso, max_res_aniso=max_res_aniso,
-                                      grid_ablation=grid_ablation, content_aniso_max=content_aniso_max,
+                                      content_aniso_max=content_aniso_max,
                                       bias_field_std=0, return_resolution=True)
 
     # 2) shared directional per-axis regression head on the synthetic image (generator.outputs[0])

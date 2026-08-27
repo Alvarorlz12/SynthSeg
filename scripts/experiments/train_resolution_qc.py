@@ -40,7 +40,7 @@ path_generation_classes = os.path.join(PRIORS, 'generation_classes.npy')
 # v5, three changes: (1) content-anisotropy aug, random per-axis gaussian low-pass on the clean image,
 # decorrelated from the resolution label so the head stops reading absolute directional smoothness as resolution;
 # (2) drop_abs drops the non-transferable lg1/lg2 absolute energies (~84-93% of the synthetic-only separation) to
-# force the head onto the transferable g-norm/roll cues; (3) grid_ablation='kernel_phase' so the head can't
+# force the head onto the transferable g-norm/roll cues; (3) the head cannot
 # separate the aug from real degradation via a fixed grid signature.
 DROP_ABS = False         # drop-lg broke iso detection (cross-axis g-norm cancels for iso; lg1/lg2 were the
 #                          only iso cue) and didn't move the clean-real match (still 0.00). panel verdict: restore lg.
@@ -54,7 +54,6 @@ path_model_dir = os.path.join(ROOT, 'models',
 # resolution sampling / label
 max_res_iso = 4.0        # isotropic LR draw U(min_res, 4)
 max_res_aniso = 8.0      # single-axis anisotropic LR draw up to 8 mm
-grid_ablation = 'kernel_phase'   # v5: realistic phase-jittered linear-up (breaks the fixed grid signature) so the
 #                                  head cannot tell the content aug from real degradation via a grid cheat
 huber_delta = 0.1        # transition on the normalized log-spacing label (~23% of spacing)
 degraded_weight = 4.0    # soft hurdle against the ~62% min_res point mass (dw8 was a null change, back to v1's 4)
@@ -99,7 +98,6 @@ training(path_training_label_maps,
          prior_distributions=prior_distributions,
          max_res_iso=max_res_iso,
          max_res_aniso=max_res_aniso,
-         grid_ablation=grid_ablation,
          content_aniso_max=CONTENT_ANISO_MAX,
          reorient=reorient,
          huber_delta=huber_delta,

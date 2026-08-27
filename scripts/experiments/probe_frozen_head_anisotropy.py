@@ -114,7 +114,7 @@ def make_clean_generator(a, gen_labels, labels_shape, atlas_res, output_div):
                                  scaling_bounds=False, rotation_bounds=False, shearing_bounds=False,
                                  translation_bounds=False, nonlin_std=0,
                                  randomise_res=True, max_res_iso=a.max_res_iso, max_res_aniso=a.max_res_aniso,
-                                 grid_ablation='none', bias_field_std=0, return_resolution=True)
+                                 bias_field_std=0, return_resolution=True)
 
 
 def tap_clean_image(generator):
@@ -206,7 +206,7 @@ def exp3_gate(a, AX, n_dims, cleans, pred_axis, feat_axes, degrade, rng, feat_na
     print('  >>> %s' % (
         'GO -> a TRANSFERABLE mild-band separation survives; the augmentation can teach a cue that DEPLOYS. '
         'Proceed to the GPU run: mild randomized per-axis sigma ~U(0,0.8) post-IntensityAugmentation, DROP lg1/lg2, '
-        'grid_ablation=kernel_phase. Watch Test-B: does it still DETECT real degradation after ignoring smoothness?'
+        'Watch Test-B: does it still DETECT real degradation after ignoring smoothness?'
         if go else
         'NO-GO as-is -> the mild-band transferable separation is too thin / lg-driven. Do NOT retrain blindly: first '
         'STRENGTHEN the transferable bandwidth cue (a Nyquist / noise-floor CUTOFF feature, or a 2nd roll fraction), '

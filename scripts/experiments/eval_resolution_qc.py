@@ -109,7 +109,7 @@ def main():
                                       aff=np.eye(4), scaling_bounds=False, rotation_bounds=False,
                                       shearing_bounds=False, translation_bounds=False, nonlin_std=0, **reorient_kw,
                                       randomise_res=True, max_res_iso=a.max_res_iso, max_res_aniso=a.max_res_aniso,
-                                      grid_ablation=a.grid_ablation, content_aniso_max=a.content_aniso_max,
+                                      content_aniso_max=a.content_aniso_max,
                                       bias_field_std=0, return_resolution=True)
     reg = build_resqc_model(generator, n_dims,
                             no_context=not a.context, hidden=a.hidden, ctx_dim=a.ctx_dim, spectral=a.spectral,

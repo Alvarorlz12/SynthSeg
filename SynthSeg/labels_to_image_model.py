@@ -26,25 +26,15 @@ from ext.lab2im import layers
 from ext.lab2im import edit_tensors as l2i_et
 from ext.lab2im.edit_volumes import get_ras_axes
 
-def _masked_std(args):
-    """std of B(x) over non-background voxels. Returns [batch, 1]"""
-    field, labels = args
-    mask = tf.cast(tf.not_equal(labels, 0), field.dtype)
-    axes = [1, 2, 3]
-    n = tf.reduce_sum(mask, axis=axes) + 1e-8
-    mean = tf.reduce_sum(field * mask, axis=axes) / n
-    mean2 = tf.reduce_sum(tf.square(field) * mask, axis=axes) / n
-    return tf.sqrt(tf.maximum(mean2 - mean*mean, 0.0))  # [b, nchannels] to [b, 1]
-
-
 def _whole_std(field):
     """std of B(x) over all voxels of the crop, no brain mask. Returns [batch, 1]. The mask-free severity,
     which a QC head can reproduce at deployment without a segmentation, and which is defined even on a crop
-    that misses the brain (unlike _masked_std, whose empty-mask value is a degenerate 0)."""
+    that misses the brain."""
     axes = [1, 2, 3]
     mean = tf.reduce_mean(field, axis=axes)
     mean2 = tf.reduce_mean(tf.square(field), axis=axes)
     return tf.sqrt(tf.maximum(mean2 - mean * mean, 0.0))
+
 
 def labels_to_image_model(labels_shape,
                           n_channels,
@@ -69,13 +59,11 @@ def labels_to_image_model(labels_shape,
                           res_prob_min=0.05,
                           max_res_iso=4.,
                           max_res_aniso=8.,
-                          grid_ablation=None,
                           data_res=None,
                           thickness=None,
                           bias_field_std=.5,
                           bias_scale=.025,
                           bias_prob=.95,
-                          bias_std_masked=True,
                           return_bias_std=False,
                           return_resolution=False,
                           return_gradients=False,
@@ -183,10 +171,6 @@ def labels_to_image_model(labels_shape,
     target is read off the corrupted image (bias severity, tissue means) otherwise never sees the uncorrupted end
     of its own range. When return_bias_std is on the returned field is zeroed on the same draw that skips the
     bias, so a bias-free image gets std_log = 0. Only used when bias_field_std>0.
-    :param bias_std_masked: (optional) when return_bias_std is on, whether the returned std of the log-bias
-    field is taken over the brain (non-background voxels, the default, back-compatible) or over all voxels of
-    the crop (False, the mask-free severity a QC head can reproduce with no segmentation). Only used when
-    return_bias_std is on.
     :param return_bias_std: (optional) whether to return the bias field standard deviation as an output of the model.
     :param return_resolution: (optional) whether to expose the realised per-axis voxel spacing (the effective
     resolution the content is degraded to, in mm/axis) as the named output layer 'resolution'. Requires
@@ -255,15 +239,11 @@ def labels_to_image_model(labels_shape,
         if return_bias_std:
             image, log_bias = layers.BiasFieldCorruption(bias_field_std, bias_scale, False,
                                                          prob=bias_prob, return_field=True)(image)
-            # expose the realised log-bias field B(x) and the masking labels as named layers (identity
-            # pass-throughs, numerically unchanged) so a field-estimation QC head can read the per-voxel
-            # ground truth and the brain mask, alongside the scalar 'bias_field_std'.
+            # expose the realised log-bias field B(x) as a named layer (an identity pass-through,
+            # numerically unchanged) so a field-estimation QC head can read the per-voxel ground truth
+            # alongside the scalar 'bias_field_std'.
             log_bias = KL.Lambda(lambda x: x, name='bias_field_log')(log_bias)
-            labels_for_mask = KL.Lambda(lambda x: x, name='bias_mask_labels')(labels)
-            if bias_std_masked:
-                bias_std_log = KL.Lambda(_masked_std, name='bias_field_std')([log_bias, labels_for_mask])
-            else:
-                bias_std_log = KL.Lambda(_whole_std, name='bias_field_std')(log_bias)
+            bias_std_log = KL.Lambda(_whole_std, name='bias_field_std')(log_bias)
         else:
             image = layers.BiasFieldCorruption(bias_field_std, bias_scale, False, prob=bias_prob)(image)
 
@@ -271,8 +251,9 @@ def labels_to_image_model(labels_shape,
     # the clip runs before the min-max, so intensity_clip=0 keeps saturation and floor fractions absolute-scale
     # landmarks. prob_gamma below 1 leaves un-gamma'd images in the stream, which a head that reads its target off
     # the corrupted image needs.
-    image = layers.IntensityAugmentation(clip=intensity_clip, normalise=True, gamma_std=intensity_gamma_std,
-                                         prob_gamma=intensity_gamma_prob, separate_channels=True)(image)
+    image = layers.IntensityAugmentation(clip=intensity_clip, normalise=True,
+                                         gamma_std=intensity_gamma_std, prob_gamma=intensity_gamma_prob,
+                                         separate_channels=True)(image)
 
     # content-anisotropy domain randomisation for resolution-QC: a random per-axis Gaussian low-pass, independent of
     # the resolution label, so directional content smoothness becomes a nuisance decorrelated from the spacing
@@ -288,8 +269,6 @@ def labels_to_image_model(labels_shape,
     # loop over channels
     channels = list()
     resolution_out = None
-    assert grid_ablation in (None, 'none', 'blur_only', 'kernel_random', 'kernel_phase'), \
-        "grid_ablation must be one of None/'none'/'blur_only'/'kernel_random'/'kernel_phase', got %r" % (grid_ablation,)
     if return_resolution:
         assert randomise_res, 'return_resolution=True requires randomise_res=True (the per-axis resolution is only ' \
                               'sampled on the randomise_res path).'
@@ -308,14 +287,7 @@ def labels_to_image_model(labels_shape,
                 resolution_out = KL.Lambda(lambda x: x, name='resolution')(resolution)
             sigma = l2i_et.blurring_sigma_for_downsampling(atlas_res, resolution, thickness=blur_res)
             channel = layers.DynamicGaussianBlur(0.75 * max_res / np.array(atlas_res), 1.03)([channel, sigma])
-            # grid-cheat ablation (resolution-QC sim-to-real diagnostic): 'blur_only' bypasses the resampling-grid
-            # imprint (only the Gaussian blur cue remains); 'kernel_random' randomizes the resample kernel + sub-voxel
-            # grid phase so the fixed SynthSeg grid signature can't be memorized; None/'none' = original behaviour.
-            channel = layers.MimicAcquisition(atlas_res, atlas_res, output_shape, False,
-                                              skip_resample=(grid_ablation == 'blur_only'),
-                                              randomize_kernel=(grid_ablation in ('kernel_random', 'kernel_phase')),
-                                              randomize_up_method=(grid_ablation == 'kernel_random'))(
-                                                  [channel, resolution])
+            channel = layers.MimicAcquisition(atlas_res, atlas_res, output_shape, False)([channel, resolution])
             channels.append(channel)
 
         else:

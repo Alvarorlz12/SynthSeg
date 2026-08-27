@@ -378,7 +378,7 @@ def make_generator(a, gen_labels, labels_shape, atlas_res, output_div):
                                  scaling_bounds=False, rotation_bounds=False, shearing_bounds=False,
                                  translation_bounds=False, nonlin_std=0,
                                  randomise_res=True, max_res_iso=max_iso, max_res_aniso=max_aniso,
-                                 grid_ablation=a.grid_ablation, bias_field_std=0, return_resolution=True)
+                                 bias_field_std=0, return_resolution=True)
 
 
 def main():
@@ -423,7 +423,7 @@ def main():
     qc_model.compile(optimizer=opt, loss=metrics.IdentityLoss().loss)
     dummy = np.zeros((a.batch, 1))
     print('\n=== PHASE 1: train (%d steps, gradient=%d, fourier=%d, grid=%s) ==='
-          % (a.steps, a.use_gradient, a.use_fourier, a.grid_ablation))
+          % (a.steps, a.use_gradient, a.use_fourier))
     run = None
     for step in range(1, a.steps + 1):
         l = float(np.mean(qc_model.train_on_batch(next(train_src), dummy)))
