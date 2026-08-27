@@ -64,10 +64,6 @@ def training(labels_dir,
              # resolution sampling (the in-graph label)
              max_res_iso=4.0,
              max_res_aniso=8.0,
-             # content-anisotropy augmentation: random per-axis intrinsic Gaussian low-pass (sigma ~ U(0, this)
-             # voxels) on the clean image, decorrelated from the resolution label, so the head can no longer read
-             # absolute per-axis content smoothness as resolution. 0 = off.
-             content_aniso_max=0.0,
              # orientation augmentation: randomly reorient the anatomy via 90-degree rotations + flips only
              # (exact, no interpolation) so anatomical direction is decorrelated from the array/degradation axes,
              # so the head can't confuse anatomical spectral anisotropy with resolution anisotropy. Deliberately no
@@ -84,7 +80,7 @@ def training(labels_dir,
              spectral=False,
              rolloff=False,
              # drop the absolute log-raw energies lg1/lg2 (non-transferable + confound-feeding) to force the head
-             # onto the transferable g-norm/roll cues. Pair with content_aniso_max>0.
+             # onto the transferable g-norm/roll cues.
              drop_abs=False,
              n_levels=5,
              nb_conv_per_level=2,
@@ -190,7 +186,6 @@ def training(labels_dir,
                                       aff=np.eye(4), scaling_bounds=False, rotation_bounds=False,
                                       shearing_bounds=False, translation_bounds=False, nonlin_std=0, **reorient_kw,
                                       randomise_res=True, max_res_iso=max_res_iso, max_res_aniso=max_res_aniso,
-                                      content_aniso_max=content_aniso_max,
                                       bias_field_std=0, return_resolution=True)
 
     # 2) shared directional per-axis regression head on the synthetic image (generator.outputs[0])
@@ -262,7 +257,7 @@ def build_directional_features(image, n_dims=3, spectral=False, rolloff=False, d
     cancels the isotropic case. The descriptor is 4 features with spectral=False, 7 with spectral=True.
     drop_abs=True drops the absolute log-raw energies lg1/lg2, which do not transfer (real absolute energy !=
     synthetic) and feed the anatomical-anisotropy confound, so dropping them forces the head onto the
-    transferable g-norm/roll cues. Pair it with the content-anisotropy augmentation."""
+    transferable g-norm/roll cues."""
     g1 = _grad_energy(image, 1, n_dims)   # [B, nd]
     g2 = _grad_energy(image, 2, n_dims)   # [B, nd]
     norm = lambda t: t / (K.mean(t, axis=1, keepdims=True) + K.epsilon())

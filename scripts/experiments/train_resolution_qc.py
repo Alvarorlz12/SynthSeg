@@ -37,17 +37,11 @@ path_generation_labels = os.path.join(PRIORS, 'generation_labels.npy')
 path_generation_classes = os.path.join(PRIORS, 'generation_classes.npy')
 
 # v5 config (post-probe fix for the inverted clean-real confound)
-# v5, three changes: (1) content-anisotropy aug, random per-axis gaussian low-pass on the clean image,
-# decorrelated from the resolution label so the head stops reading absolute directional smoothness as resolution;
-# (2) drop_abs drops the non-transferable lg1/lg2 absolute energies (~84-93% of the synthetic-only separation) to
-# force the head onto the transferable g-norm/roll cues; (3) the head cannot
-# separate the aug from real degradation via a fixed grid signature.
-DROP_ABS = False         # drop-lg broke iso detection (cross-axis g-norm cancels for iso; lg1/lg2 were the
-#                          only iso cue) and didn't move the clean-real match (still 0.00). panel verdict: restore lg.
-#                          so content-aug on + lg kept is the next run, models/resolution_qc_v5_aniso_lgkept, which
-#                          keeps the aug's native-axis robustness and iso detection.
-#                          set True only to reproduce the deprecated drop-lg v5.
-CONTENT_ANISO_MAX = 0.8  # per-axis content low-pass sigma ~ U(0, this) voxels (mild ~ real anatomical anisotropy)
+# v5 had two changes left: drop_abs drops the non-transferable lg1/lg2 absolute energies (~84-93% of the
+# synthetic-only separation) to force the head onto the transferable g-norm/roll cues. The third one, the
+# content-anisotropy augmentation, was removed from labels_to_image_model on 2026-08-28, so this script can
+# no longer reproduce the v5 arms that used it.
+DROP_ABS = False
 path_model_dir = os.path.join(ROOT, 'models',
                               'resolution_qc_v5_aniso' + ('' if DROP_ABS else '_lgkept'))
 
@@ -98,7 +92,6 @@ training(path_training_label_maps,
          prior_distributions=prior_distributions,
          max_res_iso=max_res_iso,
          max_res_aniso=max_res_aniso,
-         content_aniso_max=CONTENT_ANISO_MAX,
          reorient=reorient,
          huber_delta=huber_delta,
          degraded_weight=degraded_weight,

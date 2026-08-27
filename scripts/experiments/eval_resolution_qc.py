@@ -65,9 +65,6 @@ def parse_args():
                    help='set if the checkpoint was trained WITH the per-axis cumulative-energy roll-off feature (5-feat head).')
     p.add_argument('--drop-abs', action='store_true',
                    help='set if the checkpoint was trained WITHOUT the absolute log-raw energies lg1/lg2 (g-norm+roll head).')
-    p.add_argument('--content-aniso-max', type=float, default=0.0,
-                   help='set to the value the checkpoint was trained with (e.g. 0.8) to eval on the SAME content-anisotropy-augmented '
-                        'distribution the head was trained on; 0 = clean synthetic.')
     p.add_argument('--hidden', type=int, default=64)
     p.add_argument('--ctx-dim', type=int, default=16)
     p.add_argument('--nb-conv-per-level', type=int, default=2)
@@ -109,7 +106,6 @@ def main():
                                       aff=np.eye(4), scaling_bounds=False, rotation_bounds=False,
                                       shearing_bounds=False, translation_bounds=False, nonlin_std=0, **reorient_kw,
                                       randomise_res=True, max_res_iso=a.max_res_iso, max_res_aniso=a.max_res_aniso,
-                                      content_aniso_max=a.content_aniso_max,
                                       bias_field_std=0, return_resolution=True)
     reg = build_resqc_model(generator, n_dims,
                             no_context=not a.context, hidden=a.hidden, ctx_dim=a.ctx_dim, spectral=a.spectral,

@@ -26,16 +26,6 @@ from ext.lab2im import layers
 from ext.lab2im import edit_tensors as l2i_et
 from ext.lab2im.edit_volumes import get_ras_axes
 
-def _whole_std(field):
-    """std of B(x) over all voxels of the crop, no brain mask. Returns [batch, 1]. The mask-free severity,
-    which a QC head can reproduce at deployment without a segmentation, and which is defined even on a crop
-    that misses the brain."""
-    axes = [1, 2, 3]
-    mean = tf.reduce_mean(field, axis=axes)
-    mean2 = tf.reduce_mean(tf.square(field), axis=axes)
-    return tf.sqrt(tf.maximum(mean2 - mean * mean, 0.0))
-
-
 def labels_to_image_model(labels_shape,
                           n_channels,
                           generation_labels,
@@ -67,7 +57,6 @@ def labels_to_image_model(labels_shape,
                           return_bias_std=False,
                           return_resolution=False,
                           return_gradients=False,
-                          content_aniso_max=0.0,
                           intensity_gamma_std=0.5,
                           intensity_gamma_prob=1.,
                           intensity_clip=300):
@@ -176,10 +165,6 @@ def labels_to_image_model(labels_shape,
     resolution the content is degraded to, in mm/axis) as the named output layer 'resolution'. Requires
     randomise_res=True. In-graph regression target for the resolution-QC head, like return_bias_std. Slice
     thickness is a nuisance latent and is not exposed. Only supported for n_channels=1 (channel-0 spacing).
-    :param content_aniso_max: (optional) maximum sigma, in voxels, of an extra per-axis Gaussian low-pass applied to
-    the clean image before the resolution degradation. Drawn per sample and per axis from U(0, content_aniso_max), and
-    independent of the resolution label, so directional smoothness of the content stops being a proxy for spacing.
-    Default is 0, which disables it.
     :param return_gradients: (optional) whether to return the synthetic image or the magnitude of its spatial gradient
     (computed with Sobel kernels).
     :param intensity_gamma_std: (optional) std of the normal distribution the gamma exponent is drawn from, in the log
@@ -243,7 +228,11 @@ def labels_to_image_model(labels_shape,
             # numerically unchanged) so a field-estimation QC head can read the per-voxel ground truth
             # alongside the scalar 'bias_field_std'.
             log_bias = KL.Lambda(lambda x: x, name='bias_field_log')(log_bias)
-            bias_std_log = KL.Lambda(_whole_std, name='bias_field_std')(log_bias)
+            # severity target: std of B(x) over every voxel of the crop, no brain mask. A QC head can
+            # reproduce it at deployment without a segmentation, and it is defined even on a crop that
+            # misses the brain.
+            bias_std_log = KL.Lambda(lambda x: tf.math.reduce_std(x, axis=[1, 2, 3]),
+                                     name='bias_field_std')(log_bias)
         else:
             image = layers.BiasFieldCorruption(bias_field_std, bias_scale, False, prob=bias_prob)(image)
 
@@ -254,17 +243,6 @@ def labels_to_image_model(labels_shape,
     image = layers.IntensityAugmentation(clip=intensity_clip, normalise=True,
                                          gamma_std=intensity_gamma_std, prob_gamma=intensity_gamma_prob,
                                          separate_channels=True)(image)
-
-    # content-anisotropy domain randomisation for resolution-QC: a random per-axis Gaussian low-pass, independent of
-    # the resolution label, so directional content smoothness becomes a nuisance decorrelated from the spacing
-    # target. applied after IntensityAugmentation and before the resolution degradation, so the per-axis
-    # 'resolution' label is unchanged. sigma ~ U(0, content_aniso_max) voxels; max_sigma=content_aniso_max keeps the
-    # kernel on the DynamicGaussianBlur non-separable branch, which guards sigma=0.
-    if content_aniso_max and content_aniso_max > 0:
-        content_sigma = KL.Lambda(
-            lambda x: tf.random.uniform([tf.shape(x)[0], n_dims], 0., float(content_aniso_max)),
-            name='content_aniso_sigma')(image)
-        image = layers.DynamicGaussianBlur([float(content_aniso_max)] * n_dims, None)([image, content_sigma])
 
     # loop over channels
     channels = list()
