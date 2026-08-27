@@ -48,7 +48,7 @@ import keras.layers as KL
 import keras.backend as K
 
 from SynthSeg.labels_to_image_model import labels_to_image_model
-from SynthSeg.training_biasfield_qc import huber_loss
+from experiments.training_biasfield_qc import huber_loss
 from SynthSeg.model_inputs import build_model_inputs
 from SynthSeg import metrics_model as metrics
 from ext.lab2im import utils

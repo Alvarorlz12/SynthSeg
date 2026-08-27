@@ -29,7 +29,7 @@ import numpy as np
 from keras import models
 
 from SynthSeg.labels_to_image_model import labels_to_image_model
-from SynthSeg.training_biasfield_qc import build_biasqc_model
+from experiments.training_biasfield_qc import build_biasqc_model
 from SynthSeg.model_inputs import build_model_inputs
 from ext.lab2im import utils
 

@@ -1,6 +1,6 @@
 """
 Launch script for the bias-field QC regressor (experiment-1).
-Calls SynthSeg.training_biasfield_qc.training with the experiment parameters.
+Calls experiments.training_biasfield_qc.training with the experiment parameters.
 Puts the repo root on sys.path and resolves paths relative to itself, so it
 runs from any working directory (interactive node, nohup, or sbatch).
 
@@ -28,7 +28,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from SynthSeg.training_biasfield_qc import training
+from experiments.training_biasfield_qc import training
 
 # paths
 DATA = os.path.join(ROOT, 'data')

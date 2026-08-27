@@ -30,7 +30,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from argparse import ArgumentParser
-from SynthSeg.training_biasfield_scalar import training
+from experiments.training_biasfield_scalar import training
 
 parser = ArgumentParser()
 

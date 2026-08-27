@@ -16,7 +16,7 @@ Defaults: no_context=True (the conv-encoder global context drowns the 4 directio
 the head to the min_res mode), degraded_weight=4.0 (soft hurdle against the ~62% min_res point mass),
 lr=3e-4.
 
-Clone of training_biasfield_qc.py with the regression target swapped (bias_std to per-axis
+Clone of experiments/training_biasfield_qc.py with the regression target swapped (bias_std to per-axis
 resolution) and the head replaced by the shared directional regressor.
 
 Copyright 2026 Álvaro Ruiz López, Benjamin Billot, and the SynthSeg contributors

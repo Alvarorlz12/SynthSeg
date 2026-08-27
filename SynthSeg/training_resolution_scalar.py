@@ -1,7 +1,7 @@
 """
 
 Trains a per-axis regressor to read the realised voxel spacing (the effective resolution, in mm/axis) of
-the synthetic image. It is the bias-field severity regressor (SynthSeg/training_biasfield_scalar.py) with
+the synthetic image. It is the bias-field severity regressor (experiments/training_biasfield_scalar.py) with
 the target swapped: one severity scalar becomes three per-axis spacings, and nothing else changes.
 
 the target is `resolution`, the per-axis spacing SynthSeg's randomise_res path degraded the content to. the
