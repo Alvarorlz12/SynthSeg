@@ -32,7 +32,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from argparse import ArgumentParser
-from SynthSeg.training_resolution_scalar import training
+from QC.training_rs import training
 
 parser = ArgumentParser()
 
