@@ -55,6 +55,7 @@ def labels_to_image_model(labels_shape,
                           bias_scale=.025,
                           bias_prob=.95,
                           return_bias_std=False,
+                          bias_field_after_gamma=False,
                           return_resolution=False,
                           return_gradients=False,
                           intensity_gamma_std=0.5,
@@ -161,6 +162,7 @@ def labels_to_image_model(labels_shape,
     of its own range. When return_bias_std is on the returned field is zeroed on the same draw that skips the
     bias, so a bias-free image gets std_log = 0. Only used when bias_field_std>0.
     :param return_bias_std: (optional) whether to return the bias field standard deviation as an output of the model.
+    :param bias_field_after_gamma: (optional) whether to apply the bias field after the intensity augmentation (gamma).
     :param return_resolution: (optional) whether to expose the realised per-axis voxel spacing (the effective
     resolution the content is degraded to, in mm/axis) as the named output layer 'resolution'. Requires
     randomise_res=True. In-graph regression target for the resolution-QC head, like return_bias_std. Slice
@@ -218,31 +220,39 @@ def labels_to_image_model(labels_shape,
     # build synthetic image
     image = layers.SampleConditionalGMM(generation_labels)([labels, means_input, stds_input])
 
-    # apply bias field
-    bias_std_log = None
-    if bias_field_std > 0:
-        if return_bias_std:
-            image, log_bias = layers.BiasFieldCorruption(bias_field_std, bias_scale, False,
-                                                         prob=bias_prob, return_field=True)(image)
-            # expose the realised log-bias field B(x) as a named layer (an identity pass-through,
-            # numerically unchanged) so a field-estimation QC head can read the per-voxel ground truth
-            # alongside the scalar 'bias_field_std'.
-            log_bias = KL.Lambda(lambda x: x, name='bias_field_log')(log_bias)
-            # severity target: std of B(x) over every voxel of the crop, no brain mask. A QC head can
-            # reproduce it at deployment without a segmentation, and it is defined even on a crop that
-            # misses the brain.
-            bias_std_log = KL.Lambda(lambda x: tf.math.reduce_std(x, axis=[1, 2, 3]),
-                                     name='bias_field_std')(log_bias)
-        else:
-            image = layers.BiasFieldCorruption(bias_field_std, bias_scale, False, prob=bias_prob)(image)
+    # bias field corruption callable from two places
+    def _bias(img):
+        """returns (image, bias_std_log). Same block as before but made callable"""
+        if bias_field_std <= 0:
+            return img, None
+        if not return_bias_std:
+            return layers.BiasFieldCorruption(bias_field_std, bias_scale, False,
+                                              prob=bias_prob)(img), None
 
-    # intensity augmentation
-    # the clip runs before the min-max, so intensity_clip=0 keeps saturation and floor fractions absolute-scale
-    # landmarks. prob_gamma below 1 leaves un-gamma'd images in the stream, which a head that reads its target off
-    # the corrupted image needs.
-    image = layers.IntensityAugmentation(clip=intensity_clip, normalise=True,
-                                         gamma_std=intensity_gamma_std, prob_gamma=intensity_gamma_prob,
-                                         separate_channels=True)(image)
+        img, log_bias = layers.BiasFieldCorruption(bias_field_std, bias_scale, False,
+                                                   prob=bias_prob, return_field=True)(img)
+        log_bias = KL.Lambda(lambda x: x, name='bias_field_log')(log_bias)
+        return img, KL.Lambda(lambda x: tf.math.reduce_std(x, axis=[1, 2, 3]), name='bias_field_std')(log_bias)
+
+    if bias_field_after_gamma:
+        assert intensity_clip > 0, 'bias_field_after_gamma needs intensity_clip > 0'
+        assert bias_field_std > 0, 'bias_field_after_gamma with no bias field is a no-op'
+        # intensity augmentation
+        image = layers.IntensityAugmentation(clip=intensity_clip, normalise=True,
+                                             gamma_std=intensity_gamma_std, prob_gamma=intensity_gamma_prob,
+                                             separate_channels=True, name='intensity_pre_bias')(image)
+        # apply bias field
+        image, bias_std_log = _bias(image)
+        # clipping the result of the image with bias to [0, 1] is strictly needed
+        # otherwise the image would be disproportionately dark
+        image = KL.Lambda(lambda x: tf.clip_by_value(x, 0., 1.), name='bias_ceiling')(image)
+    else:
+        # apply bias field
+        image, bias_std_log = _bias(image)
+        # intensity augmentation
+        image = layers.IntensityAugmentation(clip=intensity_clip, normalise=True,
+                                             gamma_std=intensity_gamma_std, prob_gamma=intensity_gamma_prob,
+                                             separate_channels=True, name='intensity_augmentation')(image)
 
     # loop over channels
     channels = list()
