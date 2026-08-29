@@ -87,7 +87,11 @@ parser.add_argument('--lr', type=float, dest='lr', default=1e-4)
 parser.add_argument('--clipnorm', type=float, dest='clipnorm', default=0.)
 parser.add_argument('--epochs', type=int, dest='epochs', default=100)
 parser.add_argument('--steps_per_epoch', type=int, dest='steps_per_epoch', default=1000)
-parser.add_argument('--validation_steps', type=int, dest='validation_steps', default=100)
+# DEPRECATED and ignored: the online validation callback was ours, not SynthSeg's, and it was removed.
+# Kept so the launchers on ICM, Jean Zay and CLEPS -- which are gitignored and do not arrive by pull --
+# do not die on 'unrecognized arguments'.
+parser.add_argument('--validation_steps', type=int, dest='validation_steps', default=0,
+                    help='deprecated, ignored')
 parser.add_argument('--checkpoint', type=str, dest='checkpoint', default=None)
 parser.add_argument('--seed', type=int, dest='seed', default=0)
 

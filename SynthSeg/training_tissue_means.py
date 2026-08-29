@@ -126,8 +126,8 @@ def training(labels_dir,
     what ties each tissue to a single intensity).
 
     :param tissues: (optional) comma separated tissues to regress, among CSF, GM, WM. Default is all three.
-    :param holdout: (optional) number of label maps kept out of training, i.e. the anatomy the validation
-    loss is measured on. The split is deterministic on the sorted paths, so the evaluation script agrees on
+    :param holdout: (optional) number of label maps kept out of training, i.e. anatomy the run never
+    sees. The split is deterministic on the sorted paths, so the evaluation script agrees on
     which maps were never seen: change it in both or the val curve and the offline probe stop meaning the
     same thing. Default is 4, i.e. 16 for training out of the 20 in the repo.
     :param batchsize: (optional) number of images per minibatch. Default is 1.
@@ -177,8 +177,9 @@ def training(labels_dir,
     Default is 0.
     :param epochs: (optional) number of epochs. Default is 100.
     :param steps_per_epoch: (optional) steps per epoch, i.e. how often the model is saved. Default is 1000.
-    :param validation_steps: (optional) images drawn from the held-out label maps at the end of each epoch to
-    log a val_loss next to the loss. 0 turns it off. Default is 100.
+    :param validation_steps: DEPRECATED and ignored. The online validation callback was ours, not
+    SynthSeg's, and it is gone: every image is drawn fresh, so the training loss is already out of sample.
+    The argument is still accepted so that the launchers on the clusters, which are not in git, keep running.
     :param checkpoint: (optional) path of a saved model to resume from.
     :param min_vox: (optional) a tissue with fewer voxels in the crop is not scored in the loss. Default is 8.
     :param seed: (optional) random seed. Default is 0.
@@ -188,6 +189,9 @@ def training(labels_dir,
     gen_labels = np.asarray(utils.load_array_if_path(generation_labels)).astype('int32')
     gen_classes = np.asarray(utils.load_array_if_path(generation_classes)).astype('int32')
     names = [t.strip().upper() for t in tissues.split(',') if t.strip()]
+    if validation_steps:
+        print('[warn] --validation_steps %d ignored: the online validation callback was removed'
+              % validation_steps)
     assert names and all(t in all_tissues for t in names), 'pick tissues among %s' % all_tissues
 
     # hold a few maps out of training. the split is deterministic on the sorted paths, so training and
@@ -221,18 +225,12 @@ def training(labels_dir,
     loss = build_loss(mu_true, mu_pred, present, min_vox)
     regression_model = models.Model(generator.inputs, loss)
 
-    # the fitted model outputs the loss and nothing else, so the predicted and true means are not readable
-    # from it. this second model is the same graph read at a different point: same layer objects, so the same
-    # weights, no copy and nothing to keep in sync. the loss tensor is one of its outputs, which is what lets
-    # the validation callback report the mse of the graph itself rather than a reimplementation of it, and
-    # keep the per-tissue predictions from the same forward pass.
-    val_probe = models.Model(generator.inputs, [mu_pred, mu_true, present, loss])
     n_train = int(np.sum([K.count_params(w) for w in regression_model.trainable_weights]))
     print('regressing: %s   trainable params: %d' % (', '.join(names), n_train))
 
-    # input generators. the held-out maps feed a val_loss at the end of each epoch: every image is drawn
-    # fresh here, so the loss is already out of sample in contrast and the held-out maps only add unseen
-    # anatomy, which is what the val curve measures.
+    # every image is drawn fresh at every step, so the training loss is already an out-of-sample estimate
+    # and there is nothing for an online validation stream to add on top of it. holdout only keeps anatomy
+    # unseen, for whatever is scored after the run.
     def make_generator(paths):
         model_inputs = build_model_inputs(path_label_maps=paths, n_labels=len(gen_labels),
                                           batchsize=batchsize, n_channels=1,
@@ -240,10 +238,7 @@ def training(labels_dir,
         return utils.build_training_generator(model_inputs, batchsize)
 
     input_generator = make_generator(train_paths)
-    n_val = validation_steps if (val_paths and validation_steps > 0) else 0
-    val_generator = make_generator(val_paths) if n_val else None
-    print('  label maps: %d for training, %d held out   validation steps: %d' %
-          (len(train_paths), len(val_paths), n_val))
+    print('  label maps: %d for training, %d held out' % (len(train_paths), len(val_paths)))
     # the intensity regime, printed because it is what the target distribution depends on and the log is the
     # only place a finished run can be asked what it was trained on.
     print('  intensity regime: randomise_res %s   bias_std %.2f (prob %.2f)   gamma_std %.2f (prob %.2f)'
@@ -251,7 +246,7 @@ def training(labels_dir,
              gamma_std, gamma_prob if gamma_std > 0 else 0.))
 
     train_model(regression_model, input_generator, lr, epochs, steps_per_epoch, model_dir, checkpoint,
-                init_epoch, clipnorm, val_generator, n_val, val_probe, names)
+                init_epoch, clipnorm)
 
 
 def build_generator(labels_shape, atlas_res, generation_labels, output_shape, output_div_by_n,
@@ -413,73 +408,8 @@ def load_weights_checked(model, path):
     model.load_weights(path, by_name=True)
 
 
-class ValLoss(KC.Callback):
-    """Mean loss over n images drawn from the held-out label maps, at the end of every epoch, plus the
-    per-tissue predicted and true means those images gave, saved next to the checkpoint.
-
-    keras computes a val_loss itself if fit_generator is given validation_data, but its evaluate_generator
-    runs every step and then returns the last one (keras/engine/training_generator.py:420 takes
-    outs_per_batch[-1], which is only a running mean for a stateful metric, and the loss here is stateless).
-    that would put a one-image val_loss next to a loss averaged over a thousand steps, on the same line, and
-    the val curve is the point of the run. so average it here, the way validate_qc.py averages its own scores.
-
-    the per-epoch npz is what lets the predictions be looked at as a distribution afterwards (predicted vs
-    true, per tissue) instead of only as a summary number. it is the cheap half of the run: the arrays are a
-    few hundred floats an epoch, they cannot be recovered once the run is over, and a collapsed regressor is
-    something you can see in them directly, without going through a correlation.
-    """
-
-    def __init__(self, probe, generator, steps, model_dir, names):
-        self.probe = probe
-        self.generator = generator
-        self.steps = steps
-        self.model_dir = model_dir
-        self.names = names
-        # a batch norm at batchsize 1 normalises each image by its own statistics, so what training fits is
-        # an instance-norm net, and that is the function to score. keras's predict runs the other branch,
-        # the one with the moving averages, which applies one fixed normalisation to every image: under
-        # randomised contrast the per-image statistics are exactly what varies, so that branch is a
-        # different function of the same weights. build one function with the learning phase as an explicit
-        # input to read both. no updates are passed, so neither call moves the moving averages.
-        self.fn = K.function(probe.inputs + [K.learning_phase()], probe.outputs)
-        super(ValLoss, self).__init__()
-
-    def on_epoch_end(self, epoch, logs=None):
-        pred, true, present, losses, frozen = [], [], [], [], []
-        for _ in range(self.steps):
-            inputs, _ = next(self.generator)
-            mu_p, mu_t, pres, loss = self.fn(inputs + [1])   # the net that was trained
-            pred.append(mu_p[0])
-            true.append(mu_t[0])
-            present.append(pres[0])
-            losses.append(float(loss[0, 0]))
-            # the same graph read the way predict would read it. the generator redraws, so this is a fresh
-            # image rather than the same one: it is a second estimate of the same quantity, not a pair.
-            frozen.append(float(self.fn(inputs + [0])[3][0, 0]))
-        pred, true, present = np.array(pred), np.array(true), np.array(present)
-        logs['val_loss'] = float(np.mean(losses))
-        logs['val_loss_frozen_bn'] = float(np.mean(frozen))
-
-        np.savez(os.path.join(self.model_dir, 'val_%03d.npz' % (epoch + 1)), pred=pred, true=true,
-                 present=present, loss=np.array(losses), loss_frozen_bn=np.array(frozen),
-                 tissues=np.array(self.names))
-
-        # keras builds the progress bar before this callback, so it will not show val_loss. print it, or the
-        # only place it exists is the tensorboard log and the job's own log never mentions it. the variance of
-        # the target goes next to it because the mse only means something against it: a net that has given up
-        # and predicts the mean of the target scores mse = var(target), so that is the line to beat, and the
-        # spread of the predictions against the spread of the truth says the same thing a second way.
-        print('Epoch %05d: val_loss (mse) %.5f   [reference: var(target) %.5f = the score of predicting the '
-              'mean]' % (epoch + 1, logs['val_loss'], float(np.mean(true.var(axis=0)))))
-        print('           (same weights read with frozen batch norm, as predict would: %.5f)'
-              % logs['val_loss_frozen_bn'])
-        for j, name in enumerate(self.names):
-            print('           %-3s  pred %.3f +- %.3f   true %.3f +- %.3f'
-                  % (name, pred[:, j].mean(), pred[:, j].std(), true[:, j].mean(), true[:, j].std()))
-
-
 def train_model(model, generator, learning_rate, n_epochs, n_steps, model_dir, checkpoint, init_epoch,
-                clipnorm, val_generator=None, validation_steps=0, val_probe=None, names=(), prefix='tm'):
+                clipnorm, prefix='tm'):
 
     # prepare model and log folders
     utils.mkdir(model_dir)
@@ -488,14 +418,9 @@ def train_model(model, generator, learning_rate, n_epochs, n_steps, model_dir, c
 
     # one checkpoint per epoch and a tensorboard log. weights only, so a resumed job rebuilds the model
     # from code and loads the weights by name (no need to serialise the generator and lambda layers).
-    # ValLoss has to come before the tensorboard callback: it writes val_loss into the epoch's logs and the
-    # tensorboard callback is what reads it back out, strips the val_ and files it under 'epoch_loss' in
-    # logs/validation next to the training one in logs/train. draw_learning_curve plots both as they are.
     save_file_name = os.path.join(model_dir, '%s_{epoch:03d}.h5' % prefix)
-    callbacks = [KC.ModelCheckpoint(save_file_name, save_weights_only=True, verbose=1)]
-    if val_generator is not None and validation_steps > 0:
-        callbacks.append(ValLoss(val_probe, val_generator, validation_steps, model_dir, names))
-    callbacks.append(KC.TensorBoard(log_dir=log_dir, histogram_freq=0, write_graph=True, write_images=False))
+    callbacks = [KC.ModelCheckpoint(save_file_name, save_weights_only=True, verbose=1),
+                 KC.TensorBoard(log_dir=log_dir, histogram_freq=0, write_graph=True, write_images=False)]
 
     if checkpoint is not None:
         load_weights_checked(model, checkpoint)
@@ -504,13 +429,13 @@ def train_model(model, generator, learning_rate, n_epochs, n_steps, model_dir, c
     optimizer = Adam(lr=learning_rate, clipnorm=clipnorm) if clipnorm else Adam(lr=learning_rate)
     model.compile(optimizer=optimizer, loss=metrics.IdentityLoss().loss)
 
-    # the validation stream is the ValLoss callback, not validation_data (see ValLoss for why). workers=0
-    # runs the generator on the main thread: it shares the global numpy stream that picks the label map and
-    # draws the gaussians with the validation one, so an enqueuer thread would interleave the two and make
-    # the seed meaningless.
+    # keras's defaults, which is what SynthSeg's own training loops use: one enqueuer thread and a queue
+    # of 10. it reads the next label map off disk while the graph runs, which is 0.45 s of the 2.44 s step
+    # that the main thread otherwise serialises. a single thread draws from the global numpy stream, so the
+    # seed still fixes the sequence; it was workers=0 while an online validation generator drew from that
+    # same stream, and that callback is gone.
     model.fit_generator(generator,
                         epochs=n_epochs,
                         steps_per_epoch=n_steps,
                         callbacks=callbacks,
-                        initial_epoch=init_epoch,
-                        workers=0)
+                        initial_epoch=init_epoch)

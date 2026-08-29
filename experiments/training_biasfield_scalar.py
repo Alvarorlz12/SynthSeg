@@ -34,7 +34,7 @@ it departs from the tissue-means net in exactly three places, all forced by the 
   3. the loss is a plain mse (every image has a severity), not a present-gated one (a tissue can be absent
      from a crop; a bias severity never is).
 the encoder, the head (max pool, two convolutions, spatial mean; the last convolution linear as it must be
-for a target that really reaches 0), the checkpoint guard, the ValLoss that reads the net on each image's
+for a target that really reaches 0), the checkpoint guard, the loop that reads the net on each image's
 own statistics, and the training loop are all imported from the tissue-means module so the two nets cannot
 drift apart. instance norm is the deployable default here (train == validation == deployment).
 
@@ -68,10 +68,10 @@ from SynthSeg.model_inputs import build_model_inputs
 # third-party imports
 from ext.lab2im import utils
 
-# the target swap is the only real difference, so the encoder + head, the checkpoint guard, the validation
-# callback and the training loop are the tissue-means ones, imported rather than copied so the two nets can
-# never drift apart. build_regression_model with k=1 is that head with a one-channel output.
-from SynthSeg.training_tissue_means import (build_regression_model, load_weights_checked, ValLoss,
+# the target swap is the only real difference, so the encoder + head, the checkpoint guard and the
+# training loop are the tissue-means ones, imported rather than copied so the two nets can never drift
+# apart. build_regression_model with k=1 is that head with a one-channel output.
+from SynthSeg.training_tissue_means import (build_regression_model, load_weights_checked,
                                             train_model)
 
 eps = 1e-6
@@ -183,8 +183,8 @@ def training(labels_dir,
     :param clipnorm: (optional) gradient norm clipping, 0 to turn it off. Default 0.
     :param epochs: (optional) number of epochs. Default 100.
     :param steps_per_epoch: (optional) steps per epoch (how often the model is saved). Default 1000.
-    :param validation_steps: (optional) images drawn from the held-out maps at each epoch end for a val_loss.
-    0 turns it off. Default 100.
+    :param validation_steps: DEPRECATED and ignored, like in training_tissue_means: the online validation
+    callback was ours and it is gone. Still accepted so the cluster launchers, which are not in git, run.
     :param checkpoint: (optional) path of a saved model to resume from.
     :param seed: (optional) random seed. Default 0.
     """
@@ -239,16 +239,8 @@ def training(labels_dir,
                                     unet_feat_count, feat_multiplier, activation, batch_norm, use_residuals,
                                     instance_norm, qc_head=qc_head)
     y_true = build_target(generator, std_log_max)
-    # the tissue-means ValLoss/probe carry a per-tissue 'present' count that gates its loss; there is no such
-    # gate here (a severity is always present), so a constant-ones stand-in keeps the probe signature and the
-    # saved npz shape identical without changing anything.
-    present = KL.Lambda(lambda s: K.ones_like(s), name='bf_present')(y_true)
     loss = build_loss(y_true, y_pred)
     regression_model = models.Model(generator.inputs, loss)
-
-    # a second read of the same graph (same layer objects, same weights) exposing the prediction, the target
-    # and the loss, so ValLoss can report the graph's own mse and keep pred/true per epoch.
-    val_probe = models.Model(generator.inputs, [y_pred, y_true, present, loss])
     n_train = int(np.sum([K.count_params(w) for w in regression_model.trainable_weights]))
     print('regressing bias severity  std_log in its own units, read-off threshold %.3f   trainable params: %d'
           % (std_log_max, n_train))
@@ -262,10 +254,7 @@ def training(labels_dir,
         return utils.build_training_generator(model_inputs, batchsize)
 
     input_generator = make_generator(train_paths)
-    n_val = validation_steps if (val_paths and validation_steps > 0) else 0
-    val_generator = make_generator(val_paths) if n_val else None
-    print('  label maps: %d for training, %d held out   validation steps: %d' %
-          (len(train_paths), len(val_paths), n_val))
+    print('  label maps: %d for training, %d held out' % (len(train_paths), len(val_paths)))
     print('  bias_field_std %.3f   bias_prob %.2f (~%.0f%% clean)   std_log_max %.3f'
           % (bias_field_std, bias_prob, 100 * (1 - bias_prob), std_log_max))
 
@@ -273,7 +262,7 @@ def training(labels_dir,
     # checkpoints bf_###.h5 (the tissue-means loop defaults to tm_###.h5). The model_dir already keeps the
     # two experiments apart, but the filename prefix labels a checkpoint even out of its folder.
     train_model(regression_model, input_generator, lr, epochs, steps_per_epoch, model_dir, checkpoint,
-                init_epoch, clipnorm, val_generator, n_val, val_probe, ['bias'], prefix='bf')
+                init_epoch, clipnorm, prefix='bf')
 
 
 def build_generator(labels_shape, atlas_res, generation_labels, output_shape, output_div_by_n,
@@ -307,7 +296,7 @@ def build_target(generator, std_log_max):
     # is not applied here, so nothing is truncated and a prediction stays in physical units. because the std
     # is mask-free, target 0 means genuinely no bias field was applied (the bias_prob clean fraction); a crop
     # that misses the brain is not a degenerate 0 (that was the _masked_std failure mode this measure avoids).
-    # the identity keeps the layer name, which ValLoss and the saved npz keys go by.
+    # the identity is what names the layer, which is how the target is found in the graph afterwards.
     std_log = generator.outputs[2]
     return KL.Lambda(lambda s: s, name='bf_target')(std_log)
 
