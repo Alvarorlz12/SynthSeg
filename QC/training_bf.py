@@ -49,9 +49,8 @@ from SynthSeg.model_inputs import build_model_inputs
 from ext.lab2im import utils
 from ext.neuron import models as nrn_models
 
-# the training loop and its checkpoint guard are shared with the other regression heads. their four
-# validation arguments are left at their defaults, which is what turns online validation off.
-from SynthSeg.training_tissue_means import train_model
+# the training loop and its checkpoint guard are shared with the other regression heads
+from QC.training_tm import train_model
 
 
 def training(labels_dir,

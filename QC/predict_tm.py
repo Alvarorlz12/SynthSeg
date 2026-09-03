@@ -7,7 +7,7 @@ to RAS, crop, normalise, pad: all of it calls edit_volumes in predict.py's order
 constants, so a volume scored here went through the pipeline a volume segmented by SynthSeg goes
 through. Two things predict.py does not do are taken from elsewhere in the repository rather than
 written again: carrying a second volume through the identical crop and pad (predict_group), and the
-regressor's own graph and checkpoint guard (training_tissue_means).
+regressor's own graph and checkpoint guard (QC/training_tm.py).
 
 THE SEGMENTATION NEVER ENTERS THE PREPROCESSING. It is read only for the ground-truth columns; the
 window comes from the volume alone, so nothing here needs a segmentation to run. Centring the crop on
@@ -63,7 +63,7 @@ import numpy as np
 
 # project imports
 from SynthSeg.predict import write_csv
-from SynthSeg import training_tissue_means as tm
+from QC import training_tm as tm
 
 # third-party imports
 from ext.lab2im import utils

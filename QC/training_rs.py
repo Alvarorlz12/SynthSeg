@@ -60,8 +60,8 @@ from ext.lab2im import utils
 from ext.neuron import models as nrn_models
 
 # the checkpoint guard and the training loop are the tissue-means ones. the network is built below
-# instead: the two heads do not want the same last activation.
-from SynthSeg.training_tissue_means import load_weights_checked, train_model
+# instead, under names of its own, so that a checkpoint from another head is refused.
+from QC.training_tm import load_weights_checked, train_model
 
 eps = 1e-6
 
@@ -254,8 +254,7 @@ def build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_leve
                            feat_multiplier, activation, batch_norm, use_residuals, instance_norm=False):
 
     # the dice qc net's encoder and head: conv encoder, max pool, two k-channel relu convolutions, average
-    # over space. written out here rather than imported from the tissue-means module, whose head widens the
-    # first conv and leaves the last one linear.
+    # over space. written out here rather than imported so that the layers carry the rs_ prefix.
     enc = nrn_models.conv_enc(input_model=generator, input_shape=image_shape, nb_levels=n_levels,
                               conv_size=conv_size, nb_features=feat_count, feat_mult=feat_multiplier,
                               nb_conv_per_level=nb_conv_per_level, activation=activation,
@@ -266,8 +265,6 @@ def build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_leve
     last = KL.MaxPool3D(pool_size=(2, 2, 2), padding='same', name='rs_conv_pool')(last)
     # k channels in both head convs, both relu: the target is >= 0 and is exactly 0 on a native volume,
     # so the relu fits it the way it fits a dice score.
-    # NOTE a checkpoint records neither the last activation nor the widths, so keep runs that differ in
-    # them in separate model directories.
     last = KL.Conv3D(k, kernel_size=5, **conv_kwargs, name='rs_conv0')(last)
     last = KL.Conv3D(k, kernel_size=5, **conv_kwargs, name='rs_conv1')(last)
     return KL.Lambda(lambda x: tf.reduce_mean(x, axis=[1, 2, 3]), name='rs_pred')(last)

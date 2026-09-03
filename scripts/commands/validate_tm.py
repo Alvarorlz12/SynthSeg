@@ -2,7 +2,7 @@
 
 Validate every checkpoint of one tissue-means training on the small real validation set.
 
-Thin CLI over SynthSeg.validate_tm.validate_training, in the same shape as commands/predict_tm.py: the
+Thin CLI over QC.validate_tm.validate_training, in the same shape as commands/predict_tm.py: the
 argparse dest names are the function's parameter names, so the two cannot drift.
 
 One training per call. --norm is per arm and is an architecture argument, not a preference: a checkpoint
@@ -14,9 +14,9 @@ whose csv already exists is skipped unless --recompute. The job is therefore res
 it continues where the wall clock cut it off.
 
   python scripts/commands/validate_tm.py \
-      $WORK/qc-data/validation/img $WORK/qc-data/validation/gt/ss/segs \
-      $WORK/SynthQC/models/contrast/tm_e2_instance_artefacts \
-      $WORK/qc-data/validation/scores/tm_e2 --norm instance
+      <data>/qc-data/validation/img <data>/qc-data/validation/gt/ss/segs \
+      <repo>/models/contrast/tm_e2_instance_artefacts \
+      <data>/qc-data/validation/scores/tm_e2 --norm instance
 
 If you use this code, please cite one of the SynthSeg papers:
 https://github.com/BBillot/SynthSeg/blob/master/bibtex.bib
@@ -29,7 +29,7 @@ https://www.apache.org/licenses/LICENSE-2.0
 """
 
 from argparse import ArgumentParser
-from SynthSeg.validate_tm import validate_training
+from QC.validate_tm import validate_training
 
 parser = ArgumentParser(description=__doc__)
 

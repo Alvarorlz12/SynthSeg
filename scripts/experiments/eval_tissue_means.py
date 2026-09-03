@@ -1,5 +1,5 @@
 """
-Offline evaluation for a per-tissue mean regressor checkpoint (see SynthSeg/training_tissue_means.py).
+Offline evaluation for a per-tissue mean regressor checkpoint (see experiments/training_tissue_means.py).
 
 loads a saved checkpoint, rebuilds the probe, and for a set of fresh images reports, per tissue, the mae /
 mse / pearson r / r2 of the predicted mean against the true effective mean, next to the two references it
@@ -40,7 +40,7 @@ from keras import models
 import keras.backend as K
 from ext.lab2im import utils
 from SynthSeg.model_inputs import build_model_inputs
-from SynthSeg import training_tissue_means as tm
+from experiments import training_tissue_means as tm
 
 eps = 1e-6
 

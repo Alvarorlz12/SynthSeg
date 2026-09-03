@@ -1,7 +1,7 @@
 """
 
 Trains a scalar regressor to read the realised bias-field severity of the synthetic image. It is the
-per-tissue mean regressor (SynthSeg/training_tissue_means.py) with the target swapped: three tissue means
+per-tissue mean regressor (experiments/training_tissue_means.py) with the target swapped: three tissue means
 become one severity scalar, and nothing else changes.
 
 the severity is std_log, the standard deviation of the log bias field over the whole crop with no brain mask.
@@ -71,7 +71,7 @@ from ext.lab2im import utils
 # the target swap is the only real difference, so the encoder + head, the checkpoint guard and the
 # training loop are the tissue-means ones, imported rather than copied so the two nets can never drift
 # apart. build_regression_model with k=1 is that head with a one-channel output.
-from SynthSeg.training_tissue_means import (build_regression_model, load_weights_checked,
+from experiments.training_tissue_means import (build_regression_model, load_weights_checked,
                                             train_model)
 
 eps = 1e-6
@@ -114,7 +114,6 @@ def training(labels_dir,
              clipnorm=0.,
              epochs=100,
              steps_per_epoch=1000,
-             validation_steps=100,
              qc_head=False,
              checkpoint=None,
              seed=0):
@@ -129,8 +128,8 @@ def training(labels_dir,
     randomisation rather than the 3-tissue grouping.
 
     # bias field: the target and the only intensity corruption on by default
-    :param std_log_max: (optional) the largest plausible severity, read off the severity grid of
-    experiments/25_target_range_extra_cerebral.ipynb. It is recorded and printed but never applied to the
+    :param std_log_max: (optional) the largest plausible severity, read off a sweep of the
+    generator's bias severity range. It is recorded and printed but never applied to the
     target, which stays in its own units, so it can be revised later without retraining and two runs that
     disagree on it are still comparable. Default 0.65.
     :param bias_field_std: (optional) max std of the normal the small bias tensor is sampled from; the layer
@@ -140,9 +139,9 @@ def training(labels_dir,
     :param bias_scale: (optional) ratio between the label map size and the small sampled bias tensor (its
     smoothness). Default 0.025, the SynthSeg default.
 
-    :param holdout: (optional) number of label maps kept out of training, the anatomy the validation loss is
-    measured on. Deterministic split on the sorted paths, so the eval scripts agree on which maps were never
-    seen: change it in both. Default 100.
+    :param holdout: (optional) number of label maps kept out of training, i.e. anatomy the run never
+    sees, for whatever is scored after it: no validation loss is computed here. Deterministic split on the
+    sorted paths, so the eval scripts agree on which maps were never seen: change it in both. Default 100.
     :param batchsize: (optional) images per minibatch. Default 1.
     :param output_shape: (optional) shape of the cropped output image. Default 160.
 
@@ -183,8 +182,6 @@ def training(labels_dir,
     :param clipnorm: (optional) gradient norm clipping, 0 to turn it off. Default 0.
     :param epochs: (optional) number of epochs. Default 100.
     :param steps_per_epoch: (optional) steps per epoch (how often the model is saved). Default 1000.
-    :param validation_steps: DEPRECATED and ignored, like in training_tissue_means: the online validation
-    callback was ours and it is gone. Still accepted so the cluster launchers, which are not in git, run.
     :param checkpoint: (optional) path of a saved model to resume from.
     :param seed: (optional) random seed. Default 0.
     """
@@ -245,8 +242,8 @@ def training(labels_dir,
     print('regressing bias severity  std_log in its own units, read-off threshold %.3f   trainable params: %d'
           % (std_log_max, n_train))
 
-    # input generators. the held-out maps feed a val_loss at each epoch end: every image is drawn fresh, so
-    # the loss is already out of sample in contrast and the held-out maps only add unseen anatomy.
+    # every image is drawn fresh at every step, so the training loss is already out of sample in contrast.
+    # holdout only keeps anatomy unseen, for whatever is scored after the run.
     def make_generator(paths):
         model_inputs = build_model_inputs(path_label_maps=paths, n_labels=len(gen_labels),
                                           batchsize=batchsize, n_channels=1,

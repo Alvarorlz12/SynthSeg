@@ -8,7 +8,7 @@ Command-line entry point for the tissue-means regressor, laid out like scripts/c
   python scripts/commands/predict_tm.py <images> preds.csv <model.h5> --gt <segs_dir>
 
 The crop is always centred on the volume, which is all a deployment has: the segmentation is read for
-the ground-truth columns and never to choose the window. Read the header of SynthSeg/predict_tm.py
+the ground-truth columns and never to choose the window. Read the header of QC/predict_tm.py
 before reading a number out of the csv -- the output is a mean over the window, so --cropping is part
 of the measurement and not a memory setting.
 
@@ -29,7 +29,7 @@ License.
 
 # imports
 from argparse import ArgumentParser
-from SynthSeg.predict_tm import predict_tm
+from QC.predict_tm import predict_tm
 
 parser = ArgumentParser()
 

@@ -1,33 +1,23 @@
 """
 
-This function trains a regressor network to predict the mean intensity of each tissue (csf / gm / wm) on
-the synthetic image, measured on the final normalised image the network sees (in [0, 1]) over the true
-tissue masks. the target is well defined because the generation ties each tissue to a single gaussian
-(grouped generation_classes), so the mean of a tissue is one intensity rather than an average of several
-draws.
+Trains a regressor to predict the mean intensity of each tissue (CSF / GM / WM) of the synthetic image
+it is given. The network is the SynthSeg QC net (SynthSeg/training_qc.py) with k = one output channel
+per regressed tissue.
 
-it is a blind regressor: it reads only the image and outputs one number per tissue, it does not segment.
-the net is the synthseg dice qc net (training_qc.py) kept as close to identical as the target allows: same
-generator, same encoder (five levels, batch norm on, residuals on, relu), same head bar the width of its
-first convolution, same in-graph loss, same schedule, one checkpoint per epoch, tensorboard, resume from a
-checkpoint.
+The target is measured on the final normalised image the network sees, in [0, 1], over the true tissue
+masks, which the generator returns on its second output. It is well defined because the generation ties
+each tissue to a single gaussian (grouped generation_classes), so the mean of a tissue is one intensity
+rather than an average of several draws; check_alignment refuses a generation_classes that splits a
+regressed tissue across several classes. A tissue with fewer than min_vox voxels in the crop is left out
+of the loss, since an absent tissue would give a target of exactly 0, a value the real target never takes.
 
-it departs from that net in four places, all forced by the target rather than chosen:
+It is a blind regressor: it reads the image and outputs one number per tissue, it does not segment. The
+deliverable built from it is the GM-WM contrast, |GM - WM| / (GM + WM).
 
-  1. the input is the image (one channel), not a segmentation (one channel per label).
-  2. the generator is labels_to_image_model (it paints an image), not the label-deformation model.
-  3. the target is a per-tissue mean of the image (masked pool), not a dice score against a noisy input.
-  4. a consequence of 1: conv_enc only builds the residual projection when the input has more than one
-     channel (ext/neuron/models.py:334), so at level 0 there is no projection and keras broadcasts the raw
-     image onto all 24 feature maps. levels 1-4 are the learned residual the dice qc net has everywhere.
-     this is left as it is: the degeneracy comes from the one-channel input, not from a decision here.
+The layers are named tm_*, so load_weights_checked refuses a checkpoint from another head.
 
-two things to watch, both consequences of keeping batch norm on at batchsize 1. it is then instance norm
-(one image's statistics per channel), and conv_enc puts a batch norm at the end of every level including
-the last, so what the head reads is already normalised, while the target is precisely the per-image level.
-and batch norm is the only layer here that behaves differently in training and in inference, so the loss
-(batch statistics) and the val_loss (moving averages) are two different functions of the same weights: read
-each curve against var(target), not the gap between them.
+The training loop, train_model, and the checkpoint guard, load_weights_checked, live here and are shared
+with the other two heads.
 
 If you use this code, please cite one of the SynthSeg papers:
 https://github.com/BBillot/SynthSeg/blob/master/bibtex.bib
@@ -81,7 +71,6 @@ def training(labels_dir,
              generation_labels,
              generation_classes,
              tissues='CSF,GM,WM',
-             holdout=4,
              batchsize=1,
              output_shape=160,
              flipping=True,
@@ -113,7 +102,6 @@ def training(labels_dir,
              clipnorm=0.,
              epochs=100,
              steps_per_epoch=1000,
-             validation_steps=100,
              checkpoint=None,
              min_vox=8,
              seed=0):
@@ -126,14 +114,10 @@ def training(labels_dir,
     what ties each tissue to a single intensity).
 
     :param tissues: (optional) comma separated tissues to regress, among CSF, GM, WM. Default is all three.
-    :param holdout: (optional) number of label maps kept out of training, i.e. anatomy the run never
-    sees. The split is deterministic on the sorted paths, so the evaluation script agrees on
-    which maps were never seen: change it in both or the val curve and the offline probe stop meaning the
-    same thing. Default is 4, i.e. 16 for training out of the 20 in the repo.
     :param batchsize: (optional) number of images per minibatch. Default is 1.
     :param output_shape: (optional) shape of the cropped output image. Default is 160.
 
-    # spatial deformation (same defaults as the dice qc net; pass False / 0 to turn a term off)
+    # spatial deformation (pass False / 0 to turn a term off)
     :param flipping: (optional) random right/left flip of the anatomy. The grouped generation classes tie the
     left and right label of a tissue to one gaussian and the tissue lut maps both to one index, so the label
     swap that comes with the flip changes neither the intensities nor the target: it is free anatomy, which
@@ -159,8 +143,8 @@ def training(labels_dir,
     :param clip: (optional) intensity clipping percentile (0 keeps the exact min-max). Default is 0.
     :param n_neutral_labels: (optional) number of non-lateral labels in generation_labels. Default is 18.
 
-    # architecture (the dice qc net's, unchanged; note n_levels sets the downsampling, output_shape does not:
-    # conv_enc pools after every level but the last, so the encoder divides the volume by 2 ** (n_levels - 1))
+    # architecture (n_levels sets the downsampling, output_shape only the field of view: conv_enc pools
+    # after every level but the last, so the encoder divides the volume by 2 ** (n_levels - 1))
     :param n_levels: (optional) number of levels of the encoder. Default is 5.
     :param nb_conv_per_level: (optional) number of convolutions per level. Default is 3.
     :param conv_size: (optional) size of the convolution kernels. Default is 5.
@@ -168,19 +152,18 @@ def training(labels_dir,
     :param feat_multiplier: (optional) feature multiplier between levels. Default is 2.
     :param activation: (optional) activation function. Default is 'relu'.
     :param batch_norm: (optional) axis to batch normalise, or None to turn batch norm off. It is an axis, not
-    a flag: -1 is the feature axis. Default is -1.
+    a flag: -1 is the feature axis. Default is -1. Only read when instance_norm is False.
+    :param instance_norm: (optional) normalise each image by its own statistics, in training and at
+    inference alike. Default is False.
     :param use_residuals: (optional) residual connection per level. Default is True.
 
     # training
     :param lr: (optional) learning rate. Default is 1e-4.
-    :param clipnorm: (optional) gradient norm clipping, 0 to turn it off (the dice qc net does not clip).
-    Default is 0.
+    :param clipnorm: (optional) gradient norm clipping, 0 to turn it off. Default is 0.
     :param epochs: (optional) number of epochs. Default is 100.
     :param steps_per_epoch: (optional) steps per epoch, i.e. how often the model is saved. Default is 1000.
-    :param validation_steps: DEPRECATED and ignored. The online validation callback was ours, not
-    SynthSeg's, and it is gone: every image is drawn fresh, so the training loss is already out of sample.
-    The argument is still accepted so that the launchers on the clusters, which are not in git, keep running.
-    :param checkpoint: (optional) path of a saved model to resume from.
+    :param checkpoint: (optional) path of a saved model to resume from. It must be a tm_###.h5: the epoch to
+    resume at, and the seed offset that goes with it, are parsed out of that name. Default is None.
     :param min_vox: (optional) a tissue with fewer voxels in the crop is not scored in the loss. Default is 8.
     :param seed: (optional) random seed. Default is 0.
     """
@@ -189,17 +172,11 @@ def training(labels_dir,
     gen_labels = np.asarray(utils.load_array_if_path(generation_labels)).astype('int32')
     gen_classes = np.asarray(utils.load_array_if_path(generation_classes)).astype('int32')
     names = [t.strip().upper() for t in tissues.split(',') if t.strip()]
-    if validation_steps:
-        print('[warn] --validation_steps %d ignored: the online validation callback was removed'
-              % validation_steps)
     assert names and all(t in all_tissues for t in names), 'pick tissues among %s' % all_tissues
 
-    # hold a few maps out of training. the split is deterministic on the sorted paths, so training and
-    # the evaluation script agree on which maps were never seen.
-    labels_paths = sorted(utils.list_images_in_folder(labels_dir))
-    n_hold = min(max(holdout, 0), len(labels_paths) - 1)
-    train_paths = labels_paths[:len(labels_paths) - n_hold] if n_hold else labels_paths
-    val_paths = labels_paths[len(labels_paths) - n_hold:] if n_hold else []
+    # every map in labels_dir trains: labels_dir is already the training partition of a frozen split.
+    # sorted so that a given seed means the same stream whatever order the filesystem lists the folder in.
+    train_paths = sorted(utils.list_images_in_folder(labels_dir))
 
     # a resumed job draws a fresh stream but stays reproducible
     init_epoch = 0 if checkpoint is None else int(os.path.basename(checkpoint).split('tm_')[1][:-3])
@@ -224,27 +201,21 @@ def training(labels_dir,
     mu_true, present = build_target(generator, lut, k)
     loss = build_loss(mu_true, mu_pred, present, min_vox)
     regression_model = models.Model(generator.inputs, loss)
-
     n_train = int(np.sum([K.count_params(w) for w in regression_model.trainable_weights]))
-    print('regressing: %s   trainable params: %d' % (', '.join(names), n_train))
 
-    # every image is drawn fresh at every step, so the training loss is already an out-of-sample estimate
-    # and there is nothing for an online validation stream to add on top of it. holdout only keeps anatomy
-    # unseen, for whatever is scored after the run.
-    def make_generator(paths):
-        model_inputs = build_model_inputs(path_label_maps=paths, n_labels=len(gen_labels),
-                                          batchsize=batchsize, n_channels=1,
-                                          generation_classes=gen_classes, prior_distributions='uniform')
-        return utils.build_training_generator(model_inputs, batchsize)
+    model_inputs = build_model_inputs(path_label_maps=train_paths, n_labels=len(gen_labels),
+                                      batchsize=batchsize, n_channels=1,
+                                      generation_classes=gen_classes, prior_distributions='uniform')
+    input_generator = utils.build_training_generator(model_inputs, batchsize)
 
-    input_generator = make_generator(train_paths)
-    print('  label maps: %d for training, %d held out' % (len(train_paths), len(val_paths)))
+    print('regressing: %s   %d label maps   %d params' % (', '.join(names), len(train_paths), n_train))
     # the intensity regime, printed because it is what the target distribution depends on and the log is the
     # only place a finished run can be asked what it was trained on.
     print('  intensity regime: randomise_res %s   bias_std %.2f (prob %.2f)   gamma_std %.2f (prob %.2f)'
           % (randomise_res, bias_field_std, bias_prob if bias_field_std > 0 else 0.,
              gamma_std, gamma_prob if gamma_std > 0 else 0.))
 
+    # prefix 'tm' names the checkpoints tm_###.h5.
     train_model(regression_model, input_generator, lr, epochs, steps_per_epoch, model_dir, checkpoint,
                 init_epoch, clipnorm)
 
@@ -272,10 +243,10 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
 
 
 def build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_level, conv_size, feat_count,
-                           feat_multiplier, activation, batch_norm, use_residuals, instance_norm=False, qc_head=False):
+                           feat_multiplier, activation, batch_norm, use_residuals, instance_norm=False):
 
-    # conv encoder on the image, then the dice-qc head: max pool, two convolutions, and average over space,
-    # which keeps the location until the output.
+    # the QC net's encoder and head: conv encoder, max pool, two k-channel relu convolutions, and an
+    # average over space, which keeps the location until the output.
     enc = nrn_models.conv_enc(input_model=generator, input_shape=image_shape, nb_levels=n_levels,
                               conv_size=conv_size, nb_features=feat_count, feat_mult=feat_multiplier,
                               nb_conv_per_level=nb_conv_per_level, activation=activation,
@@ -283,31 +254,11 @@ def build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_leve
                               use_residuals=use_residuals, name='tm_enc')
     last = enc.outputs[0]
     conv_kwargs = {'padding': 'same', 'activation': 'relu', 'data_format': 'channels_last'}
+    # the encoder pools after every level but the last, so this fifth pool is what makes the volume
+    # divisible by 2 ** n_levels, the output_div_by_n the generator crops to
     last = KL.MaxPool3D(pool_size=(2, 2, 2), padding='same', name='tm_conv_pool')(last)
-
-    # qc_head keeps the dice qc net's head EXACTLY: k channels in both convolutions and relu on both. That is
-    # the right head whenever the target is >= 0 and 0 is a value it really takes -- a dice score, the
-    # resolution deficit (0 on a native volume), the bias severity std(B) (exactly 0 on the ~10% of images the
-    # bias draw skips). The two deviations in the else branch were argued for the tissue-means target alone,
-    # which sits near 0.5 and never reaches 0; carrying them to a dice-shaped target changes the net for
-    # nothing. Distinct layer names on purpose: a checkpoint from the other head then has layers with nowhere
-    # to go and load_weights_checked refuses it out loud instead of loading half a net.
-    if qc_head:
-        last = KL.Conv3D(k, kernel_size=5, **conv_kwargs, name='tm_qc_conv0')(last)
-        last = KL.Conv3D(k, kernel_size=5, **conv_kwargs, name='tm_qc_conv1')(last)
-        return KL.Lambda(lambda x: tf.reduce_mean(x, axis=[1, 2, 3]), name='tm_pred')(last)
-
-    # the head's first convolution is the one place it is wider than the dice qc net's, which emits one
-    # channel per label in both of its head convs: tying ours to k the same way would make it a rank-1
-    # readout whenever a single tissue is regressed.
-    last = KL.Conv3D(max(16, k), kernel_size=5, **conv_kwargs, name='tm_conv0')(last)
-    # the last convolution is linear where the dice qc net's is relu, and this is the one place its head
-    # could not be copied. relu is right for a dice score: it is >= 0 and 0 is a value it really takes, when
-    # a label is absent. our target is a mean of a min-max normalised image, it sits near 0.5 and never goes
-    # near 0, so the relu prices in a floor the target never touches while keeping its zero-gradient region.
-    # with relu here the whole map of a channel can start out negative, and then the mean of it is exactly
-    # 0, the gradient is exactly 0, and that tissue never recovers.
-    last = KL.Conv3D(k, kernel_size=5, padding='same', activation=None, name='tm_conv1')(last)
+    last = KL.Conv3D(k, kernel_size=5, **conv_kwargs, name='tm_conv0')(last)
+    last = KL.Conv3D(k, kernel_size=5, **conv_kwargs, name='tm_conv1')(last)
     return KL.Lambda(lambda x: tf.reduce_mean(x, axis=[1, 2, 3]), name='tm_pred')(last)
 
 
@@ -386,16 +337,23 @@ def load_weights_checked(model, path):
 
     # load_weights(by_name) matches on layer names and says nothing about the ones that do not match, so an
     # architecture that is not the checkpoint's loads whatever happens to line up and then runs a different
-    # net in silence. keras only catches the case where a shared name has a different shape. the two it
-    # misses are both real here: fewer levels makes the model's names a subset of the file's, and turning
-    # batch norm off drops layers that the file still has. require the two sets to be the same.
+    # net in silence. the two cases keras misses are both real here: fewer levels makes the model's names a
+    # subset of the file's, and turning batch norm off drops layers that the file still has. a shared name
+    # with a different shape keras does catch, but as 'axes don't match array', which names nothing, so the
+    # shapes are compared here too and the layer is named.
     with h5py.File(path, 'r') as f:
         group = f['model_weights'] if 'model_weights' in f else f
         names = [n.decode() if isinstance(n, bytes) else n for n in group.attrs['layer_names']]
-        saved = set(n for n in names if len(group[n].attrs.get('weight_names', [])))
-    wanted = set(layer.name for layer in model.layers if layer.weights)
-    missing, extra = sorted(wanted - saved), sorted(saved - wanted)
-    if missing or extra:
+        saved = {}
+        for n in names:
+            weights = [w.decode() if isinstance(w, bytes) else w for w in group[n].attrs.get('weight_names', [])]
+            if weights:
+                saved[n] = [tuple(group[n][w].shape) for w in weights]
+    wanted = {layer.name: [tuple(int(d) for d in w.shape) for w in layer.weights]
+              for layer in model.layers if layer.weights}
+    missing, extra = sorted(set(wanted) - set(saved)), sorted(set(saved) - set(wanted))
+    mismatched = [n for n in sorted(set(wanted) & set(saved)) if wanted[n] != saved[n]]
+    if missing or extra or mismatched:
         detail = []
         if missing:
             detail.append('%d layer(s) this model expects are not in the file (%s)'
@@ -403,6 +361,10 @@ def load_weights_checked(model, path):
         if extra:
             detail.append('%d layer(s) in the file have nowhere to go in this model (%s)'
                           % (len(extra), ', '.join(extra[:4])))
+        if mismatched:
+            detail.append('%d layer(s) have a different shape in the file (%s)'
+                          % (len(mismatched), ', '.join('%s: %s in the file, %s here'
+                                                        % (n, saved[n], wanted[n]) for n in mismatched[:2])))
         raise ValueError('%s does not match this architecture: %s. the architecture arguments have to be '
                          'the ones the checkpoint was trained with.' % (os.path.basename(path), '; '.join(detail)))
     model.load_weights(path, by_name=True)
@@ -425,15 +387,13 @@ def train_model(model, generator, learning_rate, n_epochs, n_steps, model_dir, c
     if checkpoint is not None:
         load_weights_checked(model, checkpoint)
 
-    # the dice qc net does not clip its gradients; clipnorm 0 keeps it that way
+    # the QC net does not clip its gradients; clipnorm 0 keeps it that way
     optimizer = Adam(lr=learning_rate, clipnorm=clipnorm) if clipnorm else Adam(lr=learning_rate)
     model.compile(optimizer=optimizer, loss=metrics.IdentityLoss().loss)
 
-    # keras's defaults, which is what SynthSeg's own training loops use: one enqueuer thread and a queue
-    # of 10. it reads the next label map off disk while the graph runs, which is 0.45 s of the 2.44 s step
-    # that the main thread otherwise serialises. a single thread draws from the global numpy stream, so the
-    # seed still fixes the sequence; it was workers=0 while an online validation generator drew from that
-    # same stream, and that callback is gone.
+    # keras's own defaults, one enqueuer thread and a queue of 10, which is what SynthSeg's training loops
+    # use: it reads the next label map off disk while the graph runs. a single thread draws from the global
+    # numpy stream, so the seed still fixes the sequence.
     model.fit_generator(generator,
                         epochs=n_epochs,
                         steps_per_epoch=n_steps,

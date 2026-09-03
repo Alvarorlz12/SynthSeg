@@ -35,8 +35,8 @@ import keras.layers as KL
 import keras.models as KM
 
 from ext.lab2im import utils
-from SynthSeg import synth_dataset as ds
-from SynthSeg import training_tissue_means as tm
+from experiments import synth_dataset as ds
+from experiments import training_tissue_means as tm
 from SynthSeg.model_inputs import build_model_inputs
 
 # the module this script validates, kept with the run it belongs to rather than in the package

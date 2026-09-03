@@ -1,5 +1,9 @@
 """
-Thin launcher for the per-tissue mean regressor, mirroring scripts/commands/training.py.
+Thin launcher for the per-tissue mean regressor as it was before the head was brought back to the QC
+net's: the head the first experiments and the overfits were run with, and the one every tm_*.h5 already
+on disk holds. It runs experiments/training_tissue_means.py, whose first head convolution is widened to
+max(16, k) and whose last one is linear; scripts/experiments/overfit_tissue_means_qc.py builds that same
+pair, under those same names. Use scripts/commands/training_tm.py for a new run.
 
     python scripts/experiments/training_tissue_means.py <labels_dir> <model_dir> [options]
 
@@ -25,7 +29,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from argparse import ArgumentParser
-from SynthSeg.training_tissue_means import training
+from experiments.training_tissue_means import training
 
 parser = ArgumentParser()
 
@@ -76,11 +80,6 @@ parser.add_argument('--lr', type=float, dest='lr', default=1e-4)
 parser.add_argument('--clipnorm', type=float, dest='clipnorm', default=0.)
 parser.add_argument('--epochs', type=int, dest='epochs', default=100)
 parser.add_argument('--steps_per_epoch', type=int, dest='steps_per_epoch', default=1000)
-# DEPRECATED and ignored: the online validation callback was ours, not SynthSeg's, and it was removed.
-# Kept so the launchers on ICM, Jean Zay and CLEPS -- which are gitignored and do not arrive by pull --
-# do not die on 'unrecognized arguments'.
-parser.add_argument('--validation_steps', type=int, dest='validation_steps', default=0,
-                    help='deprecated, ignored')
 parser.add_argument('--checkpoint', type=str, dest='checkpoint', default=None)
 parser.add_argument('--seed', type=int, dest='seed', default=0)
 

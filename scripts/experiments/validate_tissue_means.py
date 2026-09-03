@@ -12,7 +12,7 @@ The other thing this script exists for. A batch norm at batchsize 1 normalises e
 statistics, so what training fits is an instance-norm net; keras's predict runs the other branch, the
 one with the moving averages, which applies one fixed normalisation to every image. Under randomised
 contrast the per-image statistics are exactly what varies, so those are two different functions of the
-same weights, and the val_loss keras logs online during training is the second one: it cannot cross
+same weights, and keras's predict-time read is the second one: it cannot cross
 var(target) no matter what the network does, because its floor is the constant offset the mismatch
 produces. This script reads the checkpoints the first way, the one the training fitted, so the train and
 validation curves are the same function and the gap between them means what it usually means.
@@ -43,8 +43,8 @@ import keras.layers as KL
 import keras.models as KM
 
 from ext.lab2im import utils
-from SynthSeg import synth_dataset as ds
-from SynthSeg import training_tissue_means as tm
+from experiments import synth_dataset as ds
+from experiments import training_tissue_means as tm
 from SynthSeg.model_inputs import build_model_inputs
 
 eps = 1e-6
@@ -85,7 +85,7 @@ def build_validation_set(a, gen_labels, gen_classes, names, hold_paths, set_path
     reused whatever you ask for, and you score the new question against the old images.
 
     Layout that goes with this, outside the repo and next to the real data:
-        $WORK/qc-data/synth/<head>/<split>/<name>.npz
+        <data>/qc-data/synth/<head>/<split>/<name>.npz
     e.g. .../synth/contrast/val/val_1000_clean.npz. The name is for humans; the fingerprint inside is
     what decides whether two files are comparable, so a renamed file cannot lie about itself.
     """
@@ -298,7 +298,7 @@ def parse_args():
                         '.npz extension is a DIRECTORY of images.npy + mu_true.npy + present.npy + '
                         'meta.json, which is memory-mappable and the form to use; .npz still works and '
                         'is read whole into ram. Keep it outside the repo, e.g. '
-                        '$WORK/qc-data/synth/contrast/val/val_1000_clean')
+                        '<data>/qc-data/synth/contrast/val/val_1000_clean')
     p.add_argument('--n_images', type=int, default=100,
                    help='images in the fixed set. 100 at 160^3 is about 1.6 GB in ram and on disk')
     p.add_argument('--step_eval', type=int, default=1)
@@ -344,7 +344,7 @@ def parse_args():
     p.add_argument('--no_residuals', action='store_true')
     p.add_argument('--frozen_bn', action='store_true',
                    help='read the checkpoints the way predict does, with the moving averages, instead of '
-                        'the way training fitted them. this is the read keras logs online during training')
+                        "the way training fitted them. this is predict's read.")
     p.add_argument('--build_only', action='store_true',
                    help='build the dataset and stop: no checkpoint is scored and --model_dir is '
                         'not needed. Building is minutes of GPU and scoring is hours, so they are '

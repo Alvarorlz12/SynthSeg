@@ -32,11 +32,11 @@ epochs. It does not measure performance, and no headline should come out of it.
 
 Usage, from a script or a notebook:
 
-    from SynthSeg import validate_tm
-    validate_tm.validate_training(image_dir='$WORK/qc-data/validation/img',
-                                  gt_dir='$WORK/qc-data/validation/gt/ss/segs',
-                                  models_dir='$WORK/SynthQC/models/contrast/tm_e2_instance_artefacts',
-                                  validation_main_dir='$WORK/qc-data/validation/scores/tm_e2')
+    from QC import validate_tm
+    validate_tm.validate_training(image_dir='<data>/qc-data/validation/img',
+                                  gt_dir='<data>/qc-data/validation/gt/ss/segs',
+                                  models_dir='models/contrast/tm_e2_instance_artefacts',
+                                  validation_main_dir='<data>/qc-data/validation/scores/tm_e2')
     validate_tm.plot_validation_curves(['.../scores/tm_e1b', '.../scores/tm_e2', '.../scores/tm_e3'])
 
 If you use this code, please cite one of the SynthSeg papers:
@@ -58,7 +58,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # project imports
-from SynthSeg.predict_tm import predict_tm
+from QC.predict_tm import predict_tm
 
 # third-party imports
 from ext.lab2im import utils

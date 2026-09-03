@@ -1,7 +1,7 @@
 """Build the 3-tissue-grouped generation classes for the extra-cerebral (531) vocabulary.
 
 The tissue-means head does NOT read generation_classes.npy. check_alignment
-(SynthSeg/training_tissue_means.py) requires every label of a regressed tissue to sit in ONE
+(QC/training_tm.py) requires every label of a regressed tissue to sit in ONE
 generation class, or the regressed mean averages several GMM draws; that grouping is
 generation_classes_3tissues_grouped.npy, in which CSF is class 1. The per-label scheme puts CSF in
 class 4, which is why generation_classes_extra531_csf.npy -- correct for its own source array -- makes
@@ -55,7 +55,7 @@ md5 = hashlib.md5(open(OUT, 'rb').read()).hexdigest()
 json.dump({
     'built_by': 'scripts/experiments/make_extra531_grouped_classes.py',
     'generated_utc': datetime.now(timezone.utc).isoformat(),
-    'for': 'the tissue-means head (training_tissue_means.py / validate_tissue_means.py), which defaults '
+    'for': 'the tissue-means head (QC/training_tm.py), which defaults '
            'to generation_classes_3tissues_grouped.npy',
     'not_to_be_confused_with': 'generation_classes_extra531_csf.npy, built from the per-label '
                                'generation_classes.npy (CSF is class 4 there, class 1 here). Passing that '
