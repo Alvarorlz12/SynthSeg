@@ -85,7 +85,8 @@ def validate_training(image_dir,
     :param target_res: (optional) resolution images are resampled to, when preprocessed is False.
     :param norm: (optional) the normalisation the checkpoints were trained with. It is an
     architecture argument: a mismatch is refused rather than silently loaded. Default is 'instance'.
-    :param recompute: (optional) recompute result files that already exist. Default is False."""
+    :param recompute: (optional) score a checkpoint again even when a result file for it already
+    exists, under either layout. Default is False, i.e. an interrupted curve resumes."""
 
     utils.mkdir(validation_main_dir)
 
@@ -94,11 +95,15 @@ def validate_training(image_dir,
     loop_info = utils.LoopInfo(len(list_models), 1, 'validating', True)
     for model_idx, path_model in enumerate(list_models):
 
-        model_val_dir = os.path.join(validation_main_dir, os.path.basename(path_model).replace('.h5', ''))
-        score_path = os.path.join(model_val_dir, 'bf_results.csv')
-        utils.mkdir(model_val_dir)
+        stem = os.path.basename(path_model).replace('.h5', '')
+        score_path = os.path.join(validation_main_dir, stem, 'bf_results.csv')
+        # a batch scoring run writes the same checkpoint flat, as predbf_<stem>.csv, in this same
+        # folder. Both count as done: read_scores and epoch_files already accept either, so a curve
+        # started one way is continued rather than recomputed from the first checkpoint.
+        flat_path = os.path.join(validation_main_dir, 'predbf_%s.csv' % stem)
 
-        if (not os.path.isfile(score_path)) | recompute:
+        if recompute or not (os.path.isfile(score_path) or os.path.isfile(flat_path)):
+            utils.mkdir(os.path.dirname(score_path))
             loop_info.update(model_idx)
             predict_bf(path_images=image_dir,
                        path_out=score_path,
