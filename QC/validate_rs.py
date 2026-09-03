@@ -21,9 +21,9 @@ images against their own headers at every epoch, so it ranks epochs without meas
 Usage, from a script or a notebook:
 
     from QC import validate_rs
-    validate_rs.validate_training(image_dir='$WORK/qc-data/validation/img',
-                                  models_dir='$WORK/SynthQC/models/resolution/rs_extra_uniform_mm_a',
-                                  validation_main_dir='$WORK/qc-data/validation/scores/resolution/rs_a')
+    validate_rs.validate_training(image_dir='<data>/qc-data/validation/img',
+                                  models_dir='models/resolution/rs_extra_uniform_mm_a',
+                                  validation_main_dir='<data>/qc-data/validation/scores/resolution/rs_a')
     validate_rs.plot_validation_curves(['.../scores/resolution/rs_a'])
 
 If you use this code, please cite one of the SynthSeg papers:

@@ -24,7 +24,7 @@ local cpu smoke (synthqc env, from repo root SynthQC), use >=96 so the crop hold
     python scripts/experiments/overfit_tissue_means_qc.py --arm anchored --steps 0 --output-shape 96 --n-levels 2
     python scripts/experiments/overfit_tissue_means_qc.py --arm encoder --steps 60 --output-shape 96 --n-levels 2
     python scripts/experiments/overfit_tissue_means_qc.py --arm encoder --tissues GM --steps 60 --output-shape 96 --n-levels 2
-real training is gpu / cluster (larger --output-shape and --steps).
+real training needs a gpu (larger --output-shape and --steps).
 
 Copyright 2026 Álvaro Ruiz López, Benjamin Billot, and the SynthSeg contributors
 Licensed under the Apache License, Version 2.0; see http://www.apache.org/licenses/LICENSE-2.0

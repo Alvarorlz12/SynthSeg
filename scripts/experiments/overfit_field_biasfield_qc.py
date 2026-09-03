@@ -18,11 +18,9 @@ the labels output (outputs[1]), used as the brain mask.
 Frozen-anatomy protocol (same as overfit_biasfield_qc.py): freeze --k anatomy tuples, only the in-graph
 bias sigma varies; PHASE 0 probe at init, PHASE 1 overfit, PHASE 2 probe post-training.
 
-Run on a GPU node in the `synthqc` env (a full 160^3 U-Net is heavy; if OOM on a 32GB V100, use
---output-shape 128 and/or --unet-feat-count 16):
-    srun --gres=gpu:1 --cpus-per-task=4 --mem=48G --time=01:30:00 --pty bash -lc \
-      'module load miniforge; source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate synthqc; \
-       cd ~/SynthQC; python scripts/experiments/overfit_field_biasfield_qc.py --steps 300'
+Needs a GPU, in the `synthqc` env (a full 160^3 U-Net is heavy; on an OOM use --output-shape 128
+and/or --unet-feat-count 16). From the repo root:
+    python scripts/experiments/overfit_field_biasfield_qc.py --steps 300
 
 Copyright 2026 Álvaro Ruiz López, Benjamin Billot, and the SynthSeg contributors
 Licensed under the Apache License, Version 2.0; see http://www.apache.org/licenses/LICENSE-2.0
@@ -87,7 +85,7 @@ def parse_args():
                    'background~0, true here; the L2 loss stays offset-sensitive so the net also learns the -log(M) offset).')
     p.add_argument('--smooth-sigma', type=float, default=0.0, help='SMOOTHNESS PRIOR (DeepN4, Opt A): masked Gaussian '
                    'blur (this sigma, in voxels; ~4-5 keeps the ~40-vox control-point scale while killing sub-15-vox '
-                   'noise; 8 over-smooths the genuine field to ~45%) applied in-graph to the '
+                   'noise; 8 over-smooths the genuine field to ~45%%) applied in-graph to the '
                    'predicted field before both the loss and the score. 0 = off.')
     p.add_argument('--probe-n', type=int, default=96)
     p.add_argument('--log-step', type=int, default=20)

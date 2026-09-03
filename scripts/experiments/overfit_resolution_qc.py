@@ -29,10 +29,8 @@ Loss = log-Huber on the per-axis normalized log-spacing (blur/spacing scale mult
 
 Run a CPU build-smoke locally (synthqc env), e.g.:
     python scripts/experiments/overfit_resolution_qc.py --output-shape 32 --n-levels 2 --steps 4 --probe-n 8
-Real training is GPU/cluster (full 160^3):
-    srun --gres=gpu:1 --cpus-per-task=4 --mem=48G --time=01:30:00 --pty bash -lc \
-      'module load miniforge; source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate synthqc; \
-       cd ~/SynthQC; python -u scripts/experiments/overfit_resolution_qc.py --steps 800 | tee res_run.log'
+Real training needs a GPU (full 160^3), from the repo root:
+    python -u scripts/experiments/overfit_resolution_qc.py --steps 800 | tee res_run.log
 
 Copyright 2026 Álvaro Ruiz López, Benjamin Billot, and the SynthSeg contributors
 Licensed under the Apache License, Version 2.0; see http://www.apache.org/licenses/LICENSE-2.0

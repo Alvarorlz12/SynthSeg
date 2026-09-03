@@ -1,7 +1,7 @@
 """
-Thin launcher for the per-axis resolution regressor, mirroring scripts/experiments/training_biasfield_scalar.py.
+Thin launcher for the per-axis resolution regressor, mirroring scripts/commands/training_bf.py.
 
-    python scripts/experiments/training_resolution_scalar.py <labels_dir> <model_dir> [options]
+    python scripts/commands/training_rs.py <labels_dir> <model_dir> [options]
 
 regresses three numbers per image: the per-array-axis voxel spacing the content was degraded to, as a
 resolution LOSS relative to the stored 1mm grid, in log, normalised to [0, 1] by max(--max_res_iso,

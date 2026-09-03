@@ -34,7 +34,7 @@ segmentation buys.
 Local CPU smoke (synthqc env, from repo root SynthQC), use >=96^3 so the crop contains a brain:
     python scripts/experiments/overfit_gmm_params_qc.py --arm anchored --output-shape 96 --probe-n 24
     python scripts/experiments/overfit_gmm_params_qc.py --arm blind --output-shape 96 --steps 200 --probe-n 24
-Real training is GPU/cluster (larger --output-shape and --steps).
+Real training needs a GPU (larger --output-shape and --steps).
 
 Copyright 2026 Álvaro Ruiz López, Benjamin Billot, and the SynthSeg contributors
 Licensed under the Apache License, Version 2.0; see http://www.apache.org/licenses/LICENSE-2.0

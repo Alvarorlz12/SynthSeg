@@ -27,13 +27,14 @@ The SynthSeg anchor is NOT looked up here. Only these ten volumes need one, so i
 SynthSeg over <out> after this than to require a pre-existing segmentation -- which is also the only
 way the FLAIR rows can exist at all, since SynthSeg was never run over the 946 FLAIR:
 
-    IMAGES=<out>/img PATTERN='*.nii*' CROP=256 OUT=<out>/gt/ss \
-      sbatch --account=zsu@cpu --array=0 scripts/slurm/synthseg_anchor_jeanzay.sh
+    python scripts/commands/SynthSeg_predict.py --i <out>/img --o <out>/gt/ss --crop 256 \
+        --vol <out>/gt/ss/vol.csv --qc <out>/gt/ss/qc.csv
 
-CROP=256 is not optional: the launcher default is 192 and the crop moves the tissue-means divisor by
-7.85 %. Nor is the pattern: images are copied under whichever of .nii and .nii.gz they arrived with,
-so '*.nii.gz' would drop an uncompressed one and leave nine anchors for ten images without a word.
-img/ holds nothing but the images, so the anchors land beside them rather than among them.
+--crop 256 is not optional: the default is 192 and the crop moves the tissue-means divisor by
+7.85 %. Nor are --vol and --qc, which ride along in the same pass and cannot be added later without
+re-segmenting. img/ holds nothing but the images, so the anchors land beside them rather than among
+them, and images are copied under whichever of .nii and .nii.gz they arrived with, so a pass that
+picks up only one of the two would leave nine anchors for ten images without a word.
 
 The recipe, and what each row buys:
 
@@ -67,7 +68,7 @@ FLAIR nulls CSF, so a FLAIR CSF tissue mean is not the same quantity as a T1w on
 and the deliverable is GM/WM, so FLAIR rows are usable with the CSF column dropped, not explained away.
 
 Run it where the data is:
-    python scripts/experiments/make_real_val10.py --root $WORK/qc-data
+    python scripts/experiments/make_real_val10.py --root <data>/qc-data
 
 If you use this code, please cite one of the SynthSeg papers:
 https://github.com/BBillot/SynthSeg/blob/master/bibtex.bib
@@ -174,7 +175,7 @@ def index_fs(root, ds):
     """{(subject, session): aseg path} for one dataset, walking the tree ONCE.
 
     Not a glob per image: that re-walks the whole tree every time, which on a cohort the size of NIFD
-    over Lustre is the difference between seconds and hours. Nor a hard-coded 'subjects/' level -- that
+    over a network filesystem is the difference between seconds and hours. Nor a hard-coded 'subjects/' level -- that
     is kirby21's layout, and it is the reason every other cohort read fs=no.
     """
     out = {}
@@ -244,7 +245,7 @@ def spread(cands, n):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--root', required=True, help='qc-data root ($WORK/qc-data)')
+    ap.add_argument('--root', required=True, help='the qc-data root')
     ap.add_argument('--out', default=None, help='default: --root/validation')
     ap.add_argument('--dry_run', action='store_true', help='print the selection, copy nothing')
     a = ap.parse_args()
@@ -332,8 +333,8 @@ def main():
         print('REMINDER: the FLAIR rows have no usable CSF column -- the sequence nulls CSF. GM, WM and '
               'the deliverable are fine.')
     print('\nnext, the SynthSeg anchor over the images just copied:\n'
-          "  IMAGES=%s/img PATTERN='*.nii*' CROP=256 OUT=%s/gt/ss \\\n"
-          '    sbatch --account=zsu@cpu --array=0 scripts/slurm/synthseg_anchor_jeanzay.sh' % (out, out))
+          '  python scripts/commands/SynthSeg_predict.py --i %s/img --o %s/gt/ss --crop 256 \\\n'
+          '    --vol %s/gt/ss/vol.csv --qc %s/gt/ss/qc.csv' % (out, out, out, out))
 
 
 if __name__ == '__main__':

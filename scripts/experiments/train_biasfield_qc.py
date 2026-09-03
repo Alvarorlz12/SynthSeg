@@ -2,7 +2,7 @@
 Launch script for the bias-field QC regressor (experiment-1).
 Calls experiments.training_biasfield_qc.training with the experiment parameters.
 Puts the repo root on sys.path and resolves paths relative to itself, so it
-runs from any working directory (interactive node, nohup, or sbatch).
+runs from any working directory.
 
 Usage (needs a GPU):
     python scripts/experiments/train_biasfield_qc.py

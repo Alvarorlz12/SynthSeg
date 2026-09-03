@@ -19,10 +19,8 @@ and would hide the inversion; the argmax-match is the diagnostic that exposed it
 
 Local CPU build-smoke (synthqc env, from repo root SynthQC):
     python scripts/experiments/overfit_resolution_gradfourier_qc.py --output-shape 32 --n-levels 2 --steps 4 --probe-n 24
-Real training is GPU/cluster (full 160^3):
-    srun --gres=gpu:1 --cpus-per-task=4 --mem=48G --time=02:00:00 --pty bash -lc \
-      'module load miniforge; source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate synthqc; \
-       cd ~/SynthQC; python -u scripts/experiments/overfit_resolution_gradfourier_qc.py --steps 2000 | tee gradfft_run.log'
+Real training needs a GPU (full 160^3), from the repo root:
+    python -u scripts/experiments/overfit_resolution_gradfourier_qc.py --steps 2000 | tee gradfft_run.log
 Real eval = ADNI (native ~0.94x0.94x1.25 + MimicAcquisition-injected known degradation + FLAIR) via the existing gate.
 
 Copyright 2026 Álvaro Ruiz López, Benjamin Billot, and the SynthSeg contributors

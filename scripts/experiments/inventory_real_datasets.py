@@ -21,8 +21,8 @@ byte-identical duplicates: counting either inflates the anchor coverage of exact
 repeat structure is the point.
 
 Usage:
-  python scripts/experiments/inventory_real_datasets.py --root $WORK/qc-data
-  python scripts/experiments/inventory_real_datasets.py --root $WORK/qc-data --datasets kirby21,nifd
+  python scripts/experiments/inventory_real_datasets.py --root <data>/qc-data
+  python scripts/experiments/inventory_real_datasets.py --root <data>/qc-data --datasets kirby21,nifd
 
 Writes inventory.csv (one row per image) next to --out, and prints the grouped table.
 
@@ -60,7 +60,7 @@ def stem_of(path):
 def index_once(root, ds):
     """Every anchor under the dataset, indexed by the stems it mentions, walking each tree ONCE.
 
-    A glob per image would re-walk the whole tree every time; on a BIDS-sized tree over Lustre that is
+    A glob per image would re-walk the whole tree every time; on a BIDS-sized tree over a network filesystem that is
     the difference between minutes and hours, with nothing printed while it happens.
     """
     ss, fs = [], []
@@ -104,7 +104,7 @@ def modality_of(path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--root', required=True, help='qc-data root ($WORK/qc-data)')
+    ap.add_argument('--root', required=True, help='qc-data root')
     ap.add_argument('--datasets', default=None, help='comma separated; default is everything under raw/')
     ap.add_argument('--out', default=None, help='where inventory.csv goes (default: --root/index)')
     a = ap.parse_args()

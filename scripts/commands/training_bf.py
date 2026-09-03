@@ -5,8 +5,8 @@ QC.training_bf.training, in the same shape as commands/predict_rs.py and command
 the argparse dest names matching the function's parameter names.
 
   python scripts/commands/training_bf.py \
-      $WORK/qc-data/synth/training_label_maps \
-      $WORK/SynthQC/models/biasfield/bf_after_gamma_a \
+      <data>/qc-data/synth/training_label_maps \
+      <repo>/models/biasfield/bf_after_gamma_a \
       --bias_field_after_gamma --gamma_std 0.5 --clip 300 --norm instance
 
 --bias_field_after_gamma reorders the field against the gamma inside labels_to_image_model. That keyword
@@ -18,7 +18,7 @@ There is no online validation. Every label map in labels_dir trains, nothing is 
 val_loss, val_###.npz or logs/validation is written. Checkpoints are scored offline afterwards.
 
 Relative paths, the two .npy defaults below included, resolve against the current directory, so run it
-from the repo root, as the slurm launchers do.
+from the repo root.
 
 If you use this code, please cite one of the SynthSeg papers:
 https://github.com/BBillot/SynthSeg/blob/master/bibtex.bib

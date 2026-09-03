@@ -38,7 +38,7 @@ raw, before normalising, so the input range is on record: a FreeSurfer conformed
 volume reached us already normalised.
 
 No GPU and no TensorFlow: this is nibabel and numpy. It is restartable -- rows already in the table
-are skipped -- so it can be run in slices on a short queue.
+are skipped -- so it can be run in several passes.
 
 Usage
 -----
@@ -335,7 +335,7 @@ def cases_kirby(manifest, index, fs, seg_name):
 RE_SES = re.compile(r'(sub-[A-Za-z0-9]+)(?:_(ses-[A-Za-z0-9]+))?_([A-Za-z0-9]+)\.nii(?:\.gz)?$')
 
 # the cross-sectional run of a Clinica CAPS tree. `long-*` is the longitudinal stream, rebuilt from a
-# per-subject template, and MEASURED on nifd (ARAMIS' own QC tables, 304 pairs): it lifts GM Dice from
+# per-subject template, and MEASURED on nifd (the cohort's own QC tables, 304 pairs): it lifts GM Dice from
 # 0.856 to 0.925 between the same two sessions. Anchoring on it measures that regulariser and not the
 # scanner, so the path is assembled and never globbed.
 FS_CS = os.path.join('%s', '%s', '%s', 't1', 'freesurfer_cross_sectional', '%s_%s', 'mri')

@@ -3,7 +3,7 @@
 Launch script for the resolution QC regressor (per-axis voxel spacing).
 Imports experiments.training_resolution_qc.training and calls it with the experiment parameters.
 Self-contained: it puts the repo root on sys.path and resolves data/model paths relative to itself,
-so it runs from any working directory (interactive node, nohup, or sbatch).
+so it runs from any working directory.
 
 Usage (needs a GPU):
     python scripts/experiments/train_resolution_qc.py

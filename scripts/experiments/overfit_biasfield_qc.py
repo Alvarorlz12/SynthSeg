@@ -20,10 +20,8 @@ Stabilisation levers (each a single variable; defaults reproduce the collapse):
   --no-residuals     turn off the residual stream (a primary explosion path) in the encoder.
 
 
-Run on a GPU node in the `synthqc` env (full 160^3 needs a GPU). Example:
-    srun --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=00:40:00 --pty bash -lc \
-      'module load miniforge; source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate synthqc; \
-       cd ~/SynthQC; python scripts/experiments/overfit_biasfield_qc.py --output linear --norm-pool --clipnorm 1.0'
+Run in the `synthqc` env, from the repo root (the full 160^3 needs a GPU). Example:
+    python scripts/experiments/overfit_biasfield_qc.py --output linear --norm-pool --clipnorm 1.0
 
 Copyright 2026 Álvaro Ruiz López, Benjamin Billot, and the SynthSeg contributors
 Licensed under the Apache License, Version 2.0; see http://www.apache.org/licenses/LICENSE-2.0

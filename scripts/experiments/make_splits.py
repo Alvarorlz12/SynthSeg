@@ -272,8 +272,8 @@ def apply_(src, dst, manifest_path, suffix, mode):
     and the failure is not an exception, it is a wrong image. So the manifest is built once, on one
     variant, and applied once per variant into its own tree:
 
-        apply --dst $WORK/label_maps_cerebral       --suffix _seg_cerebral.nii.gz
-        apply --dst $WORK/label_maps_extra_cerebral --suffix _seg_extra_cerebral.nii.gz
+        apply --dst <data>/label_maps_cerebral       --suffix _seg_cerebral.nii.gz
+        apply --dst <data>/label_maps_extra_cerebral --suffix _seg_extra_cerebral.nii.gz
 
     The same patient is then on the same side in every tree, because it is the same manifest.
 

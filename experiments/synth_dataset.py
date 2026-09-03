@@ -42,7 +42,7 @@ from ext.lab2im import utils
 
 # arguments whose value is a path. Only the last two components go into the fingerprint: it has to
 # survive being typed relative on one machine and absolute on another, and the repo living somewhere
-# else on the cluster, while still telling label_maps_cerebral/train from training_label_maps_cerebral
+# else on disk, while still telling label_maps_cerebral/train from training_label_maps_cerebral
 # -- which is precisely the distinction between the new split and the old one.
 PATH_KEYS = ('labels_dir', 'generation_labels', 'generation_classes')
 

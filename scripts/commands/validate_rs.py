@@ -5,9 +5,9 @@ Thin CLI over QC.validate_rs.validate_training, whose parameter names are the ar
 There is no gt_dir: the truth for this head is the voxel spacing in each image's own header.
 
   python scripts/commands/validate_rs.py \
-      $WORK/qc-data/validation/img \
-      $WORK/SynthQC/models/resolution/rs_extra_uniform_mm_a \
-      $WORK/qc-data/validation/scores/resolution/rs_a --norm instance
+      <data>/qc-data/validation/img \
+      <repo>/models/resolution/rs_extra_uniform_mm_a \
+      <data>/qc-data/validation/scores/resolution/rs_a --norm instance
 
 Results land in <validation_main_dir>/rs_<epoch>/rs_results.csv, one per checkpoint. A checkpoint
 whose csv exists is skipped unless --recompute, so the job is resumable.

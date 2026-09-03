@@ -25,11 +25,9 @@ image, so the GT stays fixed and only the prediction sharpens). The field panels
 Local CPU smoke (synthqc env):
     python scripts/experiments/overfit_spectral_biasfield_qc.py --output-shape 48 --n-levels 4 --steps 40 \
         --n-coeffs 5 --probe-n 8 --n-viz 2
-Real run on a GPU node (synthqc env):
-    srun --gres=gpu:1 --cpus-per-task=4 --mem=48G --time=01:30:00 --pty bash -lc \
-      'module load miniforge; source "$(conda info --base)/etc/profile.d/conda.sh"; conda activate synthqc; \
-       cd ~/SynthQC; python scripts/experiments/overfit_spectral_biasfield_qc.py --output-shape 160 --n-levels 6 \
-       --n-coeffs 5 --steps 400 --fresh'
+Real run on a GPU (synthqc env, from the repo root):
+    python scripts/experiments/overfit_spectral_biasfield_qc.py --output-shape 160 --n-levels 6 \
+        --n-coeffs 5 --steps 400 --fresh
 
 Copyright 2026 Álvaro Ruiz López, Benjamin Billot, and the SynthSeg contributors
 Licensed under the Apache License, Version 2.0; see http://www.apache.org/licenses/LICENSE-2.0
