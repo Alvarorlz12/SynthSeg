@@ -525,6 +525,9 @@ class SampleResolution(Layer):
     :param return_thickness: if set to True, this layer will also return a thickness value of the same shape as
     resolution, which will be sampled independently for each axis from the uniform distribution
     U(min_resolution, resolution).
+    :param thickness_min_frac: lower bound of that thickness draw, as a fraction of the sampled
+    resolution. 0 is the stock U(min_resolution, resolution); 1 gives thickness = resolution, i.e. the
+    contiguous acquisition a scanner actually produces.
 
     """
 
@@ -536,6 +539,7 @@ class SampleResolution(Layer):
                  prob_min=0.05,
                  return_thickness=True,
                  uniform_per_axis=False,
+                 thickness_min_frac=0.,
                  **kwargs):
 
         self.min_res = min_resolution
@@ -546,6 +550,7 @@ class SampleResolution(Layer):
         self.prob_iso = prob_iso
         self.prob_min = prob_min
         self.return_thickness = return_thickness
+        self.thickness_min_frac = thickness_min_frac
         # uniform_per_axis draws each axis independently from U(min_res, max), returning min_res on all
         # of them with probability prob_min instead. The stock branches below couple the axes: when one
         # is coarse the other two sit at min_res exactly, which a net can read instead of the blur.
@@ -565,6 +570,7 @@ class SampleResolution(Layer):
         config["prob_min"] = self.prob_min
         config["return_thickness"] = self.return_thickness
         config["uniform_per_axis"] = self.uniform_per_axis
+        config["thickness_min_frac"] = self.thickness_min_frac
         return config
 
     def build(self, input_shape):
@@ -636,8 +642,7 @@ class SampleResolution(Layer):
                                       self.min_res_tens,
                                       drawn)
             if self.return_thickness:
-                return [new_resolution,
-                        tf.random.uniform(tf.shape(self.min_res_tens), self.min_res_tens, new_resolution)]
+                return [new_resolution, self._sample_thickness(new_resolution)]
             return new_resolution
 
         # return min resolution as tensor if min=max
@@ -670,9 +675,15 @@ class SampleResolution(Layer):
                                       new_resolution)
 
         if self.return_thickness:
-            return [new_resolution, tf.random.uniform(tf.shape(self.min_res_tens), self.min_res_tens, new_resolution)]
+            return [new_resolution, self._sample_thickness(new_resolution)]
         else:
             return new_resolution
+
+    def _sample_thickness(self, new_resolution):
+        """Slice thickness, the nuisance latent the resolution target does not expose. It is drawn per
+        axis from U(low, resolution), where low is min_resolution unless thickness_min_frac raises it."""
+        low = tf.maximum(self.min_res_tens, self.thickness_min_frac * new_resolution)
+        return tf.random.uniform(tf.shape(self.min_res_tens), low, new_resolution)
 
     def compute_output_shape(self, input_shape):
         if self.return_thickness:
@@ -845,6 +856,69 @@ class DynamicGaussianBlur(Layer):
                 image = tf.map_fn(self._single_blur, [image, kernel], dtype=tf.float32)
         else:
             image = tf.map_fn(self._single_blur, [image, kernels], dtype=tf.float32)
+        return image
+
+    def _single_blur(self, inputs):
+        if self.n_channels > 1:
+            split_channels = tf.split(inputs[0], [1] * self.n_channels, axis=-1)
+            blurred_channel = list()
+            for channel in split_channels:
+                blurred = self.convnd(tf.expand_dims(channel, 0), inputs[1], [1] * (self.n_dims + 2), padding='SAME')
+                blurred_channel.append(tf.squeeze(blurred, axis=0))
+            output = tf.concat(blurred_channel, -1)
+        else:
+            output = self.convnd(tf.expand_dims(inputs[0], 0), inputs[1], [1] * (self.n_dims + 2), padding='SAME')
+            output = tf.squeeze(output, axis=0)
+        return output
+
+
+class DynamicBoxBlur(Layer):
+    """Applies a box blur to an input image, where the width of the kernel is provided as a layer input,
+    which enables the kernel to vary at each minibatch.
+
+    This is the slice profile of a real acquisition: the scanner excites a slab and measures its
+    integral. Unlike DynamicGaussianBlur it does not attenuate high frequencies smoothly, so the
+    content above the Nyquist of the acquisition grid survives and aliases in the resampling that
+    follows, as it does in a real scan.
+
+    :param max_width: maximum box width, in voxels, that will be provided as input. This is used to
+    compute the size of the kernels. It must be provided as a list of length n_dims.
+
+    example:
+    blurred_image = DynamicBoxBlur(max_width=[8.] * 3)([image, width])
+    will return a blurred version of image, where each dimension is averaged over the number of voxels
+    given by the corresponding value of width.
+    """
+
+    def __init__(self, max_width, **kwargs):
+        self.max_width = max_width
+        self.n_dims = None
+        self.n_channels = None
+        self.convnd = None
+        super(DynamicBoxBlur, self).__init__(**kwargs)
+
+    def get_config(self):
+        config = super().get_config()
+        config["max_width"] = self.max_width
+        return config
+
+    def build(self, input_shape):
+        assert len(input_shape) == 2, 'width should be provided as an input tensor for dynamic blurring'
+        self.n_dims = len(input_shape[0]) - 2
+        self.n_channels = input_shape[0][-1]
+        self.convnd = getattr(tf.nn, 'conv%dd' % self.n_dims)
+        self.max_width = utils.reformat_to_list(self.max_width, length=self.n_dims)
+        self.built = True
+        super(DynamicBoxBlur, self).build(input_shape)
+
+    def call(self, inputs, **kwargs):
+        image = inputs[0]
+        width = inputs[-1]
+        # a box is exactly separable, so the per-axis convolutions are not an approximation here.
+        # box_kernel returns None for an axis whose window is a single tap, which is the identity.
+        for kernel in l2i_et.box_kernel(width, self.max_width):
+            if kernel is not None:
+                image = tf.map_fn(self._single_blur, [image, kernel], dtype=tf.float32)
         return image
 
     def _single_blur(self, inputs):

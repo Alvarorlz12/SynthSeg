@@ -65,6 +65,13 @@ parser.add_argument('--res_prob_min', type=float, dest='res_prob_min', default=0
                     help='probability of drawing a native volume, i.e. 1 mm isotropic. Default 0.2.')
 # 'blur_only' drops the resampling grid entirely (only the Gaussian blur cue survives); 'kernel_phase' /
 # 'kernel_random' randomise the resample kernel and sub-voxel phase. default none = stock SynthSeg.
+parser.add_argument('--slice_profile', type=str, dest='slice_profile', default='gaussian',
+                    choices=['gaussian', 'box'],
+                    help="slice profile kernel. 'box' averages over the slice thickness and drops the "
+                         "anti-aliasing, as a real contiguous acquisition does. default gaussian")
+parser.add_argument('--thickness_min_frac', type=float, dest='thickness_min_frac', default=0.,
+                    help='lower bound of the slice thickness draw, as a fraction of the drawn spacing. '
+                         '0 is the stock U(atlas_res, spacing), 0.7 the range a real gap leaves. default 0')
 parser.add_argument('--no_deform', action='store_true', dest='no_deform')
 parser.add_argument('--bias_std', type=float, dest='bias_field_std', default=0.)
 parser.add_argument('--bias_scale', type=float, dest='bias_scale', default=.025)

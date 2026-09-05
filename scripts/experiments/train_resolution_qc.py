@@ -48,6 +48,9 @@ path_model_dir = os.path.join(ROOT, 'models',
 # resolution sampling / label
 max_res_iso = 4.0        # isotropic LR draw U(min_res, 4)
 max_res_aniso = 8.0      # single-axis anisotropic LR draw up to 8 mm
+slice_profile = 'gaussian'   # 'box' models the slice profile as a real acquisition does and drops the
+                             # anti-aliasing, so the degraded image carries the aliasing a scanner leaves
+thickness_min_frac = 0.0     # 1.0 makes the acquisition contiguous (thickness = spacing), as real ones are
 #                                  head cannot tell the content aug from real degradation via a grid cheat
 huber_delta = 0.1        # transition on the normalized log-spacing label (~23% of spacing)
 degraded_weight = 4.0    # soft hurdle against the ~62% min_res point mass (dw8 was a null change, back to v1's 4)
@@ -92,6 +95,8 @@ training(path_training_label_maps,
          prior_distributions=prior_distributions,
          max_res_iso=max_res_iso,
          max_res_aniso=max_res_aniso,
+         slice_profile=slice_profile,
+         thickness_min_frac=thickness_min_frac,
          reorient=reorient,
          huber_delta=huber_delta,
          degraded_weight=degraded_weight,

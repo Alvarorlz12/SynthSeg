@@ -77,6 +77,8 @@ def training(labels_dir,
              max_res_aniso=8.,
              synthseg_sampler=False,
              res_prob_min=0.2,
+             slice_profile='gaussian',
+             thickness_min_frac=0.,
              batchsize=1,
              output_shape=160,
              flipping=True,
@@ -117,6 +119,13 @@ def training(labels_dir,
     :param max_res_iso: (optional) upper bound of the per-axis uniform. Default 4, the SynthSeg default.
     :param max_res_aniso: (optional) upper bound for the axis the stock anisotropic branch selects.
     Default 8, the SynthSeg default. The per-axis sampler draws from the larger of the two bounds.
+    :param slice_profile: (optional) shape of the kernel that models the slice profile. 'gaussian' is
+    the stock path, whose width doubles as the anti-aliasing filter for the downsampling. 'box' averages
+    over the slice thickness and applies no anti-aliasing, which is what a real contiguous acquisition
+    does, so the resampling aliases as a real scan does. Default is 'gaussian'.
+    :param thickness_min_frac: (optional) lower bound of the slice thickness draw, as a fraction of the
+    sampled resolution. 0 is the stock U(atlas_res, resolution); 0.7 covers the range a real gap leaves
+    and drops the physically impossible thin slices; 1 forces a contiguous acquisition. Default is 0.
     :param res_prob_min: (optional) probability of drawing the native resolution on every axis, i.e. of a
     1 mm isotropic volume. Default 0.2.
     :param synthseg_sampler: (optional) fall back to SynthSeg's own sampler, which either shares one
@@ -186,7 +195,9 @@ def training(labels_dir,
                                 translation_bounds, nonlin_std, nonlin_scale, max_res_iso, max_res_aniso,
                                 bias_field_std, bias_scale, gamma_std, clip, flipping,
                                 res_uniform_per_axis=not synthseg_sampler,
-                                res_prob_min=res_prob_min)
+                                res_prob_min=res_prob_min,
+                                slice_profile=slice_profile,
+                                thickness_min_frac=thickness_min_frac)
     image_shape = generator.outputs[0].get_shape().as_list()[1:]
 
     # target and prediction. k=3: one spacing per array axis.
@@ -219,7 +230,8 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
                     n_neutral_labels, scaling_bounds, rotation_bounds, shearing_bounds, translation_bounds,
                     nonlin_std, nonlin_scale, max_res_iso, max_res_aniso,
                     bias_field_std, bias_scale, gamma_std, clip, flipping=True,
-                    res_uniform_per_axis=True, res_prob_min=0.2):
+                    res_uniform_per_axis=True, res_prob_min=0.2,
+                    slice_profile='gaussian', thickness_min_frac=0.):
 
     # randomise_res=True is what draws the spacing, and return_resolution asserts it. return_bias_std is
     # pinned False so 'resolution' lands at outputs[2] rather than behind 'bias_field_std'.
@@ -233,6 +245,8 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
                                nonlin_std=nonlin_std, nonlin_scale=nonlin_scale,
                                randomise_res=True, max_res_iso=max_res_iso, max_res_aniso=max_res_aniso,
                                res_uniform_per_axis=res_uniform_per_axis, res_prob_min=res_prob_min,
+                               slice_profile=slice_profile,
+                               thickness_min_frac=thickness_min_frac,
                                bias_field_std=bias_field_std, bias_scale=bias_scale,
                                intensity_gamma_std=gamma_std, intensity_clip=clip,
                                return_bias_std=False, return_resolution=True)

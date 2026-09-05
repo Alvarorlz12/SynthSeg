@@ -83,6 +83,19 @@ def blurring_sigma_for_downsampling(current_res, downsample_res, mult_coef=None,
     return sigma
 
 
+def box_width_for_downsampling(current_res, thickness):
+    """Express a slice thickness in voxels of the current grid, which is the width of the box kernel
+    that models the slice profile. Counterpart of blurring_sigma_for_downsampling for the box profile,
+    with no anti-aliasing term: a real acquisition does not low-pass filter along the slice axis.
+    :param current_res: resolution of the volume before downsampling. List or tensor.
+    :param thickness: slice thickness in each dimension, same type as current_res.
+    :return: box width in voxels, given as the same type as thickness.
+    """
+    if not tf.is_tensor(thickness):
+        return np.array(thickness) / np.array(current_res)
+    return KL.Lambda(lambda x: x / tf.convert_to_tensor(current_res, dtype='float32'))(thickness)
+
+
 def gaussian_kernel(sigma, max_sigma=None, blur_range=None, separable=True):
     """Build gaussian kernels of the specified standard deviation. The outputs are given as tensorflow tensors.
     :param sigma: standard deviation of the tensors. Can be given as a list/numpy array or as tensors. In each case,
@@ -177,6 +190,65 @@ def gaussian_kernel(sigma, max_sigma=None, blur_range=None, separable=True):
         kernels = tf.exp(kernels)
         kernels /= tf.reduce_sum(kernels)
         kernels = tf.expand_dims(tf.expand_dims(kernels, -1), -1)
+
+    return kernels
+
+
+def box_kernel(width, max_width):
+    """Build 1d box kernels of the specified width. The outputs are given as tensorflow tensors.
+
+    A box of width t is the slice profile of a real acquisition: the scanner excites a slab and
+    measures its integral, so every sub-layer inside the slice weighs the same and nothing outside
+    weighs anything. Voxels straddling the edge get their overlap as weight, which keeps the kernel
+    centred and its width exact for even widths too.
+
+    Only the separable form is built, which is exact here: an n-d box is the product of n 1-d boxes.
+
+    :param width: box width in voxels, as a tensor with one value per dimension.
+    :param max_width: largest width that will be provided, used to size the kernels. Must be a list of
+    length n_dims.
+    :return: one 1d kernel per dimension, ready for a separable convolution.
+    """
+    shape = width.get_shape().as_list()
+
+    # get n_dims and batchsize
+    if shape[0] is not None:
+        n_dims = shape[0]
+        batchsize = None
+    else:
+        n_dims = shape[1]
+        batchsize = tf.split(tf.shape(width), [1, -1])[0]
+
+    # size of the kernels. Unlike a gaussian the box is exactly zero past its edge, so the window
+    # always holds the whole kernel and nothing is truncated.
+    max_width = np.array(utils.reformat_to_list(max_width, length=n_dims))
+    windowsize = np.int32(np.ceil(max_width) / 2) * 2 + 1
+
+    split_width = tf.split(width, [1] * n_dims, axis=-1)
+    kernels = list()
+    comb = np.array(list(combinations(list(range(n_dims)), n_dims - 1))[::-1])
+    for (i, wsize) in enumerate(windowsize):
+
+        if wsize > 1:
+
+            # build meshgrid and replicate it along batch dim if dynamic blurring
+            locations = tf.cast(tf.range(0, wsize), 'float32') - (wsize - 1) / 2
+            if batchsize is not None:
+                locations = tf.tile(tf.expand_dims(locations, axis=0),
+                                    tf.concat([batchsize, tf.ones(tf.shape(tf.shape(locations)), dtype='int32')],
+                                              axis=0))
+                comb[i] += 1
+
+            # overlap between the box and each voxel: 1 inside, 0 outside, the fraction on the edge
+            g = tf.clip_by_value(split_width[i] / 2 - tf.abs(locations) + 0.5, 0., 1.)
+            g = g / tf.reduce_sum(g)
+
+            for axis in comb[i]:
+                g = tf.expand_dims(g, axis=axis)
+            kernels.append(tf.expand_dims(tf.expand_dims(g, -1), -1))
+
+        else:
+            kernels.append(None)
 
     return kernels
 

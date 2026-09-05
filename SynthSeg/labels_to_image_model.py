@@ -47,6 +47,8 @@ def labels_to_image_model(labels_shape,
                           randomise_res=False,
                           res_uniform_per_axis=False,
                           res_prob_min=0.05,
+                          slice_profile='gaussian',
+                          thickness_min_frac=0.,
                           max_res_iso=4.,
                           max_res_aniso=8.,
                           data_res=None,
@@ -133,6 +135,14 @@ def labels_to_image_model(labels_shape,
     sampler untouched. The stock one ties a coarse axis to the other two sitting at atlas_res.
     :param res_prob_min: (optional) probability of drawing the native resolution on every axis.
     Default 0.05, SampleResolution's own.
+    :param slice_profile: (optional) shape of the kernel that models the slice profile when
+    randomise_res is True. 'gaussian' is the stock path, whose width doubles as the anti-aliasing
+    filter for the downsampling. 'box' averages over the slice thickness instead, which is what a
+    scanner measures, and applies no anti-aliasing, so the resampling aliases as a real acquisition
+    does. Default is 'gaussian'.
+    :param thickness_min_frac: (optional) lower bound of the slice thickness draw, as a fraction of
+    the sampled resolution, when randomise_res is True. 0 is the stock U(atlas_res, resolution); 1
+    gives thickness = resolution, i.e. a contiguous acquisition. Default is 0.
     :param max_res_iso: (optional) If randomise_res is True, this enables to control the upper bound of the uniform
     distribution from which we sample the random resolution U(min_res, max_res_iso), where min_res is the resolution of
     the input label maps. Must be a number, and default is 4. Set to None to deactivate it, but if randomise_res is
@@ -179,6 +189,8 @@ def labels_to_image_model(labels_shape,
     as everywhere else in the library. Set it to 0 to disable the clipping, so the min-max runs over the true range of
     the image and saturation and floor fractions stay absolute-scale landmarks.
     """
+
+    assert slice_profile in ('gaussian', 'box'), "slice_profile should be 'gaussian' or 'box'"
 
     # reformat resolutions
     labels_shape = utils.reformat_to_list(labels_shape)
@@ -270,11 +282,16 @@ def labels_to_image_model(labels_shape,
             max_res = np.maximum(max_res_iso, max_res_aniso)
             resolution, blur_res = layers.SampleResolution(atlas_res, max_res_iso, max_res_aniso,
                                                           prob_min=res_prob_min,
-                                                          uniform_per_axis=res_uniform_per_axis)(means_input)
+                                                          uniform_per_axis=res_uniform_per_axis,
+                                                          thickness_min_frac=thickness_min_frac)(means_input)
             if return_resolution and (i == 0):
                 resolution_out = KL.Lambda(lambda x: x, name='resolution')(resolution)
-            sigma = l2i_et.blurring_sigma_for_downsampling(atlas_res, resolution, thickness=blur_res)
-            channel = layers.DynamicGaussianBlur(0.75 * max_res / np.array(atlas_res), 1.03)([channel, sigma])
+            if slice_profile == 'box':
+                width = l2i_et.box_width_for_downsampling(atlas_res, blur_res)
+                channel = layers.DynamicBoxBlur(max_res / np.array(atlas_res))([channel, width])
+            else:
+                sigma = l2i_et.blurring_sigma_for_downsampling(atlas_res, resolution, thickness=blur_res)
+                channel = layers.DynamicGaussianBlur(0.75 * max_res / np.array(atlas_res), 1.03)([channel, sigma])
             channel = layers.MimicAcquisition(atlas_res, atlas_res, output_shape, False)([channel, resolution])
             channels.append(channel)
 

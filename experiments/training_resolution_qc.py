@@ -55,6 +55,8 @@ def training(labels_dir,
              # resolution sampling (the in-graph label)
              max_res_iso=4.0,
              max_res_aniso=8.0,
+             slice_profile='gaussian',
+             thickness_min_frac=0.0,
              # orientation augmentation: random 90-degree rotations + flips only (exact, no
              # interpolation), to decorrelate anatomical direction from the array/degradation axes
              reorient=False,
@@ -105,6 +107,12 @@ def training(labels_dir,
     # resolution / label parameters
     :param max_res_iso: (optional) upper bound of the isotropic LR draw U(min_res, this). Default 4.0.
     :param max_res_aniso: (optional) upper bound of the single-axis anisotropic LR draw. Default 8.0.
+    :param slice_profile: (optional) 'gaussian' is the stock slice profile, whose width doubles as the
+    anti-aliasing filter. 'box' averages over the slice thickness and applies no anti-aliasing, which
+    is what a real acquisition does. Default is 'gaussian'.
+    :param thickness_min_frac: (optional) lower bound of the slice thickness draw, as a fraction of the
+    sampled resolution. 0 is the stock U(atlas_res, resolution); 1 gives a contiguous acquisition,
+    which is what every real protocol measured so far turns out to be. Default is 0.0.
     :param reorient: (optional) random 90-degree rotations and flips of the label maps. Default False.
     :param huber_delta: (optional) Huber transition on the normalized log-spacing label. Default 0.1.
     :param degraded_weight: (optional) weight of degraded axes in the loss, 1 + this * label. Default 4.0.
@@ -163,6 +171,7 @@ def training(labels_dir,
                                       aff=np.eye(4), scaling_bounds=False, rotation_bounds=False,
                                       shearing_bounds=False, translation_bounds=False, nonlin_std=0, **reorient_kw,
                                       randomise_res=True, max_res_iso=max_res_iso, max_res_aniso=max_res_aniso,
+                                      slice_profile=slice_profile, thickness_min_frac=thickness_min_frac,
                                       bias_field_std=0, return_resolution=True)
 
     # 2) shared directional per-axis regression head on the synthetic image (generator.outputs[0])
