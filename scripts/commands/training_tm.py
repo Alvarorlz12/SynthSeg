@@ -6,12 +6,13 @@ matching the function's parameter names.
 
   python scripts/commands/training_tm.py \
       <data>/qc-data/synth/training_label_maps \
-      <repo>/models/contrast/tm_e3 \
-      --generation_classes data/labels_classes_priors/generation_classes_3tissues_grouped.npy \
+      <repo>/models/contrast/tm_9groups \
       --bias_std 0.5 --gamma_std 0.5 --norm instance
 
 --generation_classes has to group the labels of each regressed tissue into one class, otherwise the
-target of that tissue mixes several drawn intensities; training refuses a grouping that does not.
+target of that tissue mixes several drawn intensities; training refuses a grouping that does not. The
+defaults are the extra-cerebral 531 vocabulary with the nine-group classes and their 19 neutral labels;
+--generation_labels, --generation_classes and --neutral_labels describe one array and move together.
 
 The target is read off the corrupted image, so with --bias_prob and --gamma_prob both at 1 the network
 never sees the clean end of its own range. Lower them to mix the regimes inside the epoch.
@@ -52,16 +53,16 @@ parser.add_argument("model_dir", type=str, help="folder the tm_###.h5 checkpoint
 
 # Generation parameters
 parser.add_argument("--generation_labels", type=str, dest="generation_labels",
-                    default='data/labels_classes_priors/generation_labels.npy',
+                    default='data/labels_classes_priors/extra_cerebral_531/generation_labels_extra531.npy',
                     help="1d array of every label value in the maps")
 parser.add_argument("--generation_classes", type=str, dest="generation_classes",
-                    default='data/labels_classes_priors/generation_classes_3tissues_grouped.npy',
+                    default='data/labels_classes_priors/extra_cerebral_531/generation_classes_9groups.npy',
                     help="1d array grouping the labels that share a drawn gaussian. It has to put each "
                          "regressed tissue in a single class.")
-parser.add_argument("--tissues", type=str, dest="tissues", default='CSF,GM,WM',
-                    help="comma separated tissues to regress, among CSF, GM and WM. It fixes the width "
-                         "of the output.")
-parser.add_argument("--neutral_labels", type=int, dest="n_neutral_labels", default=18,
+parser.add_argument("--tissues", type=str, dest="tissues", default=None,
+                    help="comma separated groups to regress, among the keys of QC.training_tm.tissue_groups, "
+                         "in output order. It fixes the width of the output. Default: all of them.")
+parser.add_argument("--neutral_labels", type=int, dest="n_neutral_labels", default=19,
                     help="number of non-lateral labels in generation_labels. It has to match the array: "
                          "the flip pairs the rest left to right and an odd remainder is refused.")
 parser.add_argument("--output_shape", type=int, dest="output_shape", default=160,

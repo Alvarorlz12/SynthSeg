@@ -42,8 +42,9 @@ parser.add_argument("path_model", type=str, help="regressor checkpoint (a tm_*.h
 parser.add_argument("--gt", type=str, dest="gt_folder", default=None,
                     help="folder of segmentations, one per image, paired in SORTED ORDER. Adds the "
                          "true_* columns and the error on the deliverable.")
-parser.add_argument("--tissues", type=str, dest="tissues", default='CSF,GM,WM',
-                    help="tissues the checkpoint regresses, in the order it was trained with")
+parser.add_argument("--tissues", type=str, dest="tissues", default=None,
+                    help="groups the checkpoint regresses, in the order it was trained with. Default: every "
+                         "key of QC.training_tm.tissue_groups, in its order.")
 
 # Saving paths
 parser.add_argument("--resampled", type=str, dest="path_resampled", default=None,

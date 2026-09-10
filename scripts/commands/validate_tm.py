@@ -41,8 +41,9 @@ parser.add_argument("models_dir", type=str, help="folder of tm_*.h5 checkpoints 
 parser.add_argument("validation_main_dir", type=str, help="folder the per-epoch subfolders go in")
 
 # What to validate
-parser.add_argument("--tissues", type=str, dest="tissues", default='CSF,GM,WM',
-                    help="tissues the checkpoints were trained with; it fixes the width of the output")
+parser.add_argument("--tissues", type=str, dest="tissues", default=None,
+                    help="groups the checkpoints were trained with; it fixes the width of the output. "
+                         "Default: every key of QC.training_tm.tissue_groups, in its order.")
 parser.add_argument("--step_eval", type=int, dest="step_eval", default=1,
                     help="validate one checkpoint every step_eval, to sketch a curve before filling it in")
 

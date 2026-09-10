@@ -73,7 +73,7 @@ from ext.lab2im import edit_volumes
 def predict_tm(path_images,
                path_out,
                path_model,
-               tissues='CSF,GM,WM',
+               tissues=None,
                gt_folder=None,
                path_resampled=None,
                cropping=160,
@@ -96,8 +96,9 @@ def predict_tm(path_images,
     :param path_out: path of the output csv. One row per image.
     :param path_model: path of the regressor checkpoint (a tm_*.h5).
 
-    :param tissues: (optional) comma separated tissues to read, among CSF, GM, WM. Must be the ones the
-    checkpoint was trained with, since it fixes the width of the output. Default is all three.
+    :param tissues: (optional) comma separated groups to read, among the keys of QC.training_tm.tissue_groups
+    and in the order the checkpoint was trained with, since it fixes the width of the output. Default is
+    None: all of them, in the dict's order.
     :param gt_folder: (optional) folder of segmentations, one per image, paired in sorted order. Turns on
     the ground truth columns: the same per-tissue means read off the segmentation, on the same crop of
     the same normalised volume, plus the absolute error on the deliverable. Any label map with the
@@ -138,7 +139,8 @@ def predict_tm(path_images,
         return
 
     # prepare the tissue list, and check it against the groups the target is defined on
-    tissues = [t.strip() for t in tissues.split(',')] if isinstance(tissues, str) else list(tissues)
+    tissues = list(tm.tissue_groups) if tissues is None \
+        else [t.strip() for t in tissues.split(',')] if isinstance(tissues, str) else list(tissues)
     for t in tissues:
         assert t in tm.tissue_groups, 'unknown tissue %r, expected among %s' % (t, list(tm.tissue_groups))
 

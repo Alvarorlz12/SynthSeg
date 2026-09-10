@@ -1,0 +1,209 @@
+{
+  "built_by": "scripts/experiments/make_9groups_classes.py",
+  "generated_utc": "2026-09-10T09:00:11.748913+00:00",
+  "for": "the tissue-means head (QC/training_tm.py) after the ungrouping agreed on 2026-09-09",
+  "replaces": "generation_classes_extra531_3tissues.npy, which regressed three numbers (CSF, GM, WM)",
+  "pairs_with": "generation_labels_extra531.npy (unchanged, 55 labels, 19 neutral)",
+  "MUST_PASS_ON_CLI": "--neutral_labels 19",
+  "n_labels": 55,
+  "n_classes": 31,
+  "n_regressed": 9,
+  "generation_classes": {
+    "background": [
+      0
+    ],
+    "csf_ventricular": [
+      4,
+      5,
+      14,
+      15,
+      43,
+      44
+    ],
+    "csf_extracerebral": [
+      24,
+      531
+    ],
+    "csf_fifth_ventricle": [
+      72
+    ],
+    "gm_cortex": [
+      3,
+      42
+    ],
+    "gm_cerebellum": [
+      8,
+      47
+    ],
+    "thalamus": [
+      10,
+      49
+    ],
+    "putamen": [
+      12,
+      51
+    ],
+    "pallidum": [
+      13,
+      52
+    ],
+    "hippocampus_amygdala": [
+      17,
+      18,
+      53,
+      54
+    ],
+    "accumbens": [
+      26,
+      58
+    ],
+    "caudate": [
+      11,
+      50
+    ],
+    "wm_cerebral": [
+      2,
+      41
+    ],
+    "wm_cerebellum": [
+      7,
+      46
+    ],
+    "brainstem": [
+      16
+    ],
+    "ventral_dc": [
+      28,
+      60
+    ],
+    "optic_chiasm": [
+      85
+    ],
+    "choroid_plexus": [
+      136,
+      137,
+      163,
+      164
+    ],
+    "lesion": [
+      25,
+      57
+    ],
+    "vessel": [
+      30,
+      62
+    ],
+    "extracerebral_502": [
+      502
+    ],
+    "extracerebral_506": [
+      506
+    ],
+    "extracerebral_507": [
+      507
+    ],
+    "extracerebral_508": [
+      508
+    ],
+    "extracerebral_509": [
+      509
+    ],
+    "extracerebral_511": [
+      511
+    ],
+    "extracerebral_512": [
+      512
+    ],
+    "extracerebral_514": [
+      514
+    ],
+    "extracerebral_515": [
+      515
+    ],
+    "extracerebral_516": [
+      516
+    ],
+    "extracerebral_530": [
+      530
+    ]
+  },
+  "regressed_groups": {
+    "csf_ventricular": [
+      4,
+      5,
+      14,
+      15,
+      43,
+      44
+    ],
+    "gm_cortex": [
+      3,
+      42
+    ],
+    "gm_cerebellum": [
+      8,
+      47
+    ],
+    "thalamus": [
+      10,
+      49
+    ],
+    "putamen": [
+      12,
+      51
+    ],
+    "pallidum": [
+      13,
+      52
+    ],
+    "hippocampus_amygdala": [
+      17,
+      18,
+      53,
+      54
+    ],
+    "wm_cerebral": [
+      2,
+      41
+    ],
+    "wm_cerebellum": [
+      7,
+      46
+    ]
+  },
+  "regressed_generation_class": {
+    "csf_ventricular": 1,
+    "gm_cortex": 4,
+    "gm_cerebellum": 5,
+    "thalamus": 6,
+    "putamen": 7,
+    "pallidum": 8,
+    "hippocampus_amygdala": 9,
+    "wm_cerebral": 12,
+    "wm_cerebellum": 13
+  },
+  "generated_but_not_regressed": [
+    "csf_extracerebral",
+    "csf_fifth_ventricle",
+    "accumbens",
+    "caudate",
+    "brainstem",
+    "ventral_dc",
+    "optic_chiasm",
+    "choroid_plexus",
+    "lesion",
+    "vessel",
+    "extracerebral_502",
+    "extracerebral_506",
+    "extracerebral_507",
+    "extracerebral_508",
+    "extracerebral_509",
+    "extracerebral_511",
+    "extracerebral_512",
+    "extracerebral_514",
+    "extracerebral_515",
+    "extracerebral_516",
+    "extracerebral_530"
+  ],
+  "md5_npy": "9a0c6bb135b2c44913bbc6115c481f73"
+}

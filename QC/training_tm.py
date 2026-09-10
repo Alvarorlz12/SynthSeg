@@ -56,21 +56,30 @@ from ext.neuron import models as nrn_models
 
 eps = 1e-6
 
-# fixed order 0=csf, 1=gm, 2=wm. each group must sit inside a single generation class, otherwise its mean
-# would mix intensities from several draws.
-all_tissues = ['CSF', 'GM', 'WM']
+# the regressed groups, in output order: output j is the j-th key. each group must sit inside a single
+# generation class, otherwise its mean would mix intensities from several draws (check_alignment refuses it).
+# nine groups since the ungrouping of 2026-09-09; scripts/experiments/make_9groups_classes.py builds the
+# matching generation_classes_9groups.npy and prints this dict.
 tissue_groups = {
-    'CSF': [4, 5, 43, 44, 14, 15, 24, 72],   # lateral + inf-lateral ventricles l/r, 3rd/4th/5th, extra-cerebral csf
-    'GM': [3, 42, 8, 47],                     # cerebral + cerebellar cortex l/r
-    'WM': [2, 41, 7, 46],                     # cerebral + cerebellar white matter l/r
+    'csf_ventricular':      [4, 5, 14, 15, 43, 44],   # lateral + inf-lateral ventricles l/r, 3rd, 4th
+    'gm_cortex':            [3, 42],
+    'gm_cerebellum':        [8, 47],
+    'thalamus':             [10, 49],
+    'putamen':              [12, 51],
+    'pallidum':             [13, 52],
+    'hippocampus_amygdala': [17, 18, 53, 54],
+    'wm_cerebral':          [2, 41],
+    'wm_cerebellum':        [7, 46],
 }
+# derived, never written twice: the check on --tissues and check_alignment both read it
+all_tissues = list(tissue_groups)
 
 
 def training(labels_dir,
              model_dir,
              generation_labels,
              generation_classes,
-             tissues='CSF,GM,WM',
+             tissues=None,
              batchsize=1,
              output_shape=160,
              flipping=True,
@@ -113,7 +122,8 @@ def training(labels_dir,
     :param generation_classes: path to the 1d array grouping the labels that share one drawn gaussian (this is
     what ties each tissue to a single intensity).
 
-    :param tissues: (optional) comma separated tissues to regress, among CSF, GM, WM. Default is all three.
+    :param tissues: (optional) comma separated groups to regress, among the keys of tissue_groups, in the
+    order the outputs take. Default is None: all of them, in the dict's order.
     :param batchsize: (optional) number of images per minibatch. Default is 1.
     :param output_shape: (optional) shape of the cropped output image. Default is 160.
 
@@ -171,7 +181,8 @@ def training(labels_dir,
     # prepare labels and tissues
     gen_labels = np.asarray(utils.load_array_if_path(generation_labels)).astype('int32')
     gen_classes = np.asarray(utils.load_array_if_path(generation_classes)).astype('int32')
-    names = [t.strip().upper() for t in tissues.split(',') if t.strip()]
+    names = list(all_tissues) if tissues is None \
+        else [t.strip().lower() for t in tissues.split(',') if t.strip()]
     assert names and all(t in all_tissues for t in names), 'pick tissues among %s' % all_tissues
 
     # every map in labels_dir trains: labels_dir is already the training partition of a frozen split.
@@ -326,7 +337,7 @@ def check_alignment(gen_labels, gen_classes, names):
     ok = True
     for name in all_tissues:
         classes = sorted(set(lab2gen[l] for l in tissue_groups[name] if l in lab2gen))
-        print('  %-3s -> generation class(es) %s' % (name, classes))
+        print('  %-21s -> generation class(es) %s' % (name, classes))
         if name in names and len(classes) > 1:
             ok = False
     if not ok:
