@@ -289,18 +289,23 @@ class Resize(Layer):
                  zoom_factor=None,
                  size=None,
                  interp_method='linear',
+                 align_corners=False,
                  **kwargs):
         """
         Parameters: 
             interp_method: 'linear' or 'nearest'
                 'xy' indexing will have the first two entries of the flow 
                 (along last axis) flipped compared to 'ij' indexing
+            align_corners: only used with size. If True, the first and last voxels of the input land on the
+                first and last voxels of the output. If False, input voxel i lands on output voxel
+                i * size / input size, and the output voxels past the last input voxel repeat it.
         """
         self.zoom_factor = zoom_factor
         self.size = list(size)
         self.zoom_factor0 = None
         self.size0 = None
         self.interp_method = interp_method
+        self.align_corners = align_corners
         self.ndims = None
         self.inshape = None
         super(Resize, self).__init__(**kwargs)
@@ -310,6 +315,7 @@ class Resize(Layer):
         config["zoom_factor"] = self.zoom_factor
         config["size"] = self.size
         config["interp_method"] = self.interp_method
+        config["align_corners"] = self.align_corners
         return config
 
     def build(self, input_shape):
@@ -376,7 +382,8 @@ class Resize(Layer):
 
         # set value of missing size or zoom_factor
         if not any(self.zoom_factor0):
-            self.zoom_factor0 = [self.size0[i] / self.inshape[i+1] for i in range(self.ndims)]
+            ac = int(self.align_corners)
+            self.zoom_factor0 = [(self.size0[i] - ac) / (self.inshape[i+1] - ac) for i in range(self.ndims)]
         else:
             self.size0 = [int(self.inshape[f+1] * self.zoom_factor0[f]) for f in range(self.ndims)]
 
@@ -386,7 +393,10 @@ class Resize(Layer):
     def compute_output_shape(self, input_shape):
 
         output_shape = [input_shape[0]]
-        output_shape += [int(input_shape[1:-1][f] * self.zoom_factor0[f]) for f in range(self.ndims)]
+        if self.size0 is not None and any(self.size0):
+            output_shape += list(self.size0)
+        else:
+            output_shape += [int(input_shape[1:-1][f] * self.zoom_factor0[f]) for f in range(self.ndims)]
         output_shape += [input_shape[-1]]
         return tuple(output_shape)
 

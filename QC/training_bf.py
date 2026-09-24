@@ -60,6 +60,7 @@ def training(labels_dir,
              bias_field_std=0.7,
              bias_prob=0.9,
              bias_scale=.025,
+             bias_align_corners=False,
              bias_field_after_gamma=False,
              batchsize=1,
              output_shape=160,
@@ -105,7 +106,9 @@ def training(labels_dir,
     :param bias_prob: (optional) probability of applying the sampled field; the rest of the images are
     left bias-free, with target 0. Default is 0.9.
     :param bias_scale: (optional) ratio between the label map size and the small sampled bias tensor,
-    i.e. how smooth the field is. Default is 0.025.
+    i.e. how smooth the field is. A list gives several ratios, one drawn per minibatch. Default is 0.025.
+    :param bias_align_corners: (optional) put the first and last values of the small bias tensor on the first
+    and last voxels of each axis. Default is False, where the last 1/k of each axis gets a constant field.
     :param bias_field_after_gamma: (optional) apply the field after the gamma augmentation instead of
     before it. Default is False, i.e. GMM -> bias -> clip -> min-max -> gamma. Passed straight down to
     labels_to_image_model, which does not implement this argument yet.
@@ -184,7 +187,8 @@ def training(labels_dir,
                                 translation_bounds, nonlin_std, nonlin_scale, randomise_res, max_res_iso,
                                 max_res_aniso, bias_field_std, bias_prob, bias_scale, gamma_std, clip,
                                 flipping,
-                                bias_field_after_gamma=bias_field_after_gamma)
+                                bias_field_after_gamma=bias_field_after_gamma,
+                                bias_align_corners=bias_align_corners)
     image_shape = generator.outputs[0].get_shape().as_list()[1:]
 
     # target and prediction. k = 1: one scalar per image
@@ -204,9 +208,10 @@ def training(labels_dir,
 
     print('regressing bias severity  std_log in its own units   %d label maps   %d params'
           % (len(labels_paths), n_train))
-    print('  bias_field_std %.3f   bias_prob %.2f (~%.0f%% clean)   bias_scale %.3f   field applied %s '
-          'the gamma' % (bias_field_std, bias_prob, 100 * (1 - bias_prob), bias_scale,
-                         'after' if bias_field_after_gamma else 'before'))
+    print('  bias_field_std %.3f   bias_prob %.2f (~%.0f%% clean)   bias_scale %s   align_corners %s   field '
+          'applied %s the gamma' % (bias_field_std, bias_prob, 100 * (1 - bias_prob),
+                                    ' '.join('%g' % s for s in utils.reformat_to_list(bias_scale)),
+                                    bias_align_corners, 'after' if bias_field_after_gamma else 'before'))
     print('  gamma_std %.2f  clip %d' % (gamma_std, clip))
     # with gamma_std 0 there is no gamma to reorder against, though the clip and the normalisation still move
     if bias_field_after_gamma and (gamma_std <= 0):
@@ -220,7 +225,7 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
                     n_neutral_labels, scaling_bounds, rotation_bounds, shearing_bounds, translation_bounds,
                     nonlin_std, nonlin_scale, randomise_res, max_res_iso, max_res_aniso, bias_field_std,
                     bias_prob, bias_scale, gamma_std, clip, flipping=True,
-                    bias_field_after_gamma=False):
+                    bias_field_after_gamma=False, bias_align_corners=False):
 
     # return_bias_std=True adds the scalar severity at outputs[2], and return_resolution stays False so
     # that nothing is appended after it. output_labels = generation_labels keeps the label map on
@@ -237,6 +242,7 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
                                  randomise_res=randomise_res, max_res_iso=max_res_iso,
                                  max_res_aniso=max_res_aniso, bias_field_std=bias_field_std,
                                  bias_scale=bias_scale, bias_prob=bias_prob,
+                                 bias_align_corners=bias_align_corners,
                                  intensity_gamma_std=gamma_std,
                                  intensity_clip=clip, return_bias_std=True, return_resolution=False,
                                  bias_field_after_gamma=bias_field_after_gamma)

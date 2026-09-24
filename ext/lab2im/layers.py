@@ -1160,13 +1160,18 @@ class BiasFieldCorruption(Layer):
 
     :param bias_field_std: maximum value of the standard deviation sampled in 1 (it will be sampled from the range
     [0, bias_field_std])
-    :param bias_scale: ratio between the shape of the input tensor and the shape of the sampled SVF.
+    :param bias_scale: ratio between the shape of the input tensor and the shape of the sampled SVF. A list gives
+    several ratios, one of which is drawn uniformly per batch (it is not a per-axis ratio).
     :param same_bias_for_all_channels: whether to apply the same bias field to all the channels of the input tensor.
     :param prob: probability to apply this bias field corruption.
+    :param return_field: whether to also return the log bias field.
+    :param align_corners: if True, the first and last values of the small SVF land on the first and last voxels of
+    each axis. If False (default), with k values over n voxels, value i lands on voxel i * n / k and the voxels past
+    the last value are constant (the last 1/k of each axis).
     """
 
     def __init__(self, bias_field_std=.5, bias_scale=.025, same_bias_for_all_channels=False, prob=0.95,
-                 return_field=False,**kwargs):
+                 return_field=False, align_corners=False, **kwargs):
 
         # input shape
         self.several_inputs = False
@@ -1174,8 +1179,9 @@ class BiasFieldCorruption(Layer):
         self.n_dims = None
         self.n_channels = None
 
-        # sampling shape
+        # sampling shapes, one per bias_scale
         self.std_shape = None
+        self.small_bias_shapes = None
         self.small_bias_shape = None
 
         # bias field parameters
@@ -1183,6 +1189,7 @@ class BiasFieldCorruption(Layer):
         self.bias_scale = bias_scale
         self.same_bias_for_all_channels = same_bias_for_all_channels
         self.prob = prob
+        self.align_corners = align_corners
 
         # whether to return the bias field as an output
         self.return_field = return_field
@@ -1196,6 +1203,7 @@ class BiasFieldCorruption(Layer):
         config["same_bias_for_all_channels"] = self.same_bias_for_all_channels
         config["prob"] = self.prob
         config["return_field"] = self.return_field
+        config["align_corners"] = self.align_corners
         return config
 
     def build(self, input_shape):
@@ -1211,10 +1219,16 @@ class BiasFieldCorruption(Layer):
 
         # sampling shapes
         self.std_shape = [1] * (self.n_dims + 1)
-        self.small_bias_shape = utils.get_resample_shape(self.inshape[0][1:self.n_dims + 1], self.bias_scale, 1)
+        self.small_bias_shapes = [utils.get_resample_shape(self.inshape[0][1:self.n_dims + 1], s, 1)
+                                  for s in utils.reformat_to_list(self.bias_scale)]
         if not self.same_bias_for_all_channels:
             self.std_shape[-1] = self.n_channels
-            self.small_bias_shape[-1] = self.n_channels
+            for shape in self.small_bias_shapes:
+                shape[-1] = self.n_channels
+        self.small_bias_shape = self.small_bias_shapes[0]
+        if self.align_corners:
+            assert all(min(s[:-1]) > 1 for s in self.small_bias_shapes), \
+                'align_corners needs at least 2 values per axis, got %s' % self.small_bias_shapes
 
         self.built = True
         super(BiasFieldCorruption, self).build(input_shape)
@@ -1239,13 +1253,20 @@ class BiasFieldCorruption(Layer):
             # sampling shapes
             batchsize = tf.split(tf.shape(inputs[0]), [1, -1])[0]
             std_shape = tf.concat([batchsize, tf.convert_to_tensor(self.std_shape, dtype='int32')], 0)
-            bias_shape = tf.concat([batchsize, tf.convert_to_tensor(self.small_bias_shape, dtype='int32')], axis=0)
+            bias_shapes = [tf.concat([batchsize, tf.convert_to_tensor(s, dtype='int32')], axis=0)
+                           for s in self.small_bias_shapes]
+            std = tf.random.uniform(std_shape, maxval=self.bias_field_std)
 
-            # sample small bias field
-            log_bias = tf.random.normal(bias_shape, stddev=tf.random.uniform(std_shape, maxval=self.bias_field_std))
+            # sample small bias field and resize it, at one of the scales drawn per batch
+            size = self.inshape[0][1:self.n_dims + 1]
+            resize = lambda: nrn_layers.Resize(size=size, interp_method='linear', align_corners=self.align_corners)
+            branches = [lambda b=b: resize()(tf.random.normal(b, stddev=std)) for b in bias_shapes]
+            if len(branches) == 1:
+                log_bias = branches[0]()
+            else:
+                log_bias = tf.switch_case(tf.random.uniform([], 0, len(branches), dtype='int32'), branches)
 
-            # resize bias field and take exponential
-            log_bias = nrn_layers.Resize(size=self.inshape[0][1:self.n_dims + 1], interp_method='linear')(log_bias)
+            # take exponential
             bias_field = tf.math.exp(log_bias)
 
             # apply bias field with predefined probability

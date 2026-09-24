@@ -56,6 +56,7 @@ def labels_to_image_model(labels_shape,
                           bias_field_std=.5,
                           bias_scale=.025,
                           bias_prob=.95,
+                          bias_align_corners=False,
                           return_bias_std=False,
                           bias_field_after_gamma=False,
                           return_resolution=False,
@@ -165,12 +166,15 @@ def labels_to_image_model(labels_shape,
     and rescaling it to positive values by taking the voxel-wise exponential. bias_field_std designates the std dev of
     the normal distribution from which we sample the first tensor. Set to 0 to deactivate bias field corruption.
     :param bias_scale: (optional) If bias_field_std is strictly positive, this designates the ratio between the
-    size of the input label maps and the size of the first sampled tensor for synthesising the bias field.
+    size of the input label maps and the size of the first sampled tensor for synthesising the bias field. A list
+    gives several ratios, one of which is drawn per minibatch.
     :param bias_prob: (optional) probability of actually applying a sampled bias field to an image (the rest are
     left bias-free). Default .95. Lower it to leave a real fraction of clean images in the stream: a head whose
     target is read off the corrupted image (bias severity, tissue means) otherwise never sees the uncorrupted end
     of its own range. When return_bias_std is on the returned field is zeroed on the same draw that skips the
     bias, so a bias-free image gets std_log = 0. Only used when bias_field_std>0.
+    :param bias_align_corners: (optional) put the first and last values of the small bias tensor on the first and
+    last voxels of each axis. Default False, where the last 1/k of each axis gets a constant field.
     :param return_bias_std: (optional) whether to return the bias field standard deviation as an output of the model.
     :param bias_field_after_gamma: (optional) whether to apply the bias field after the intensity augmentation (gamma).
     :param return_resolution: (optional) whether to expose the realised per-axis voxel spacing (the effective
@@ -238,11 +242,11 @@ def labels_to_image_model(labels_shape,
         if bias_field_std <= 0:
             return img, None
         if not return_bias_std:
-            return layers.BiasFieldCorruption(bias_field_std, bias_scale, False,
-                                              prob=bias_prob)(img), None
+            return layers.BiasFieldCorruption(bias_field_std, bias_scale, False, prob=bias_prob,
+                                              align_corners=bias_align_corners)(img), None
 
-        img, log_bias = layers.BiasFieldCorruption(bias_field_std, bias_scale, False,
-                                                   prob=bias_prob, return_field=True)(img)
+        img, log_bias = layers.BiasFieldCorruption(bias_field_std, bias_scale, False, prob=bias_prob,
+                                                   return_field=True, align_corners=bias_align_corners)(img)
         log_bias = KL.Lambda(lambda x: x, name='bias_field_log')(log_bias)
         return img, KL.Lambda(lambda x: tf.math.reduce_std(x, axis=[1, 2, 3]), name='bias_field_std')(log_bias)
 

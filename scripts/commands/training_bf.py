@@ -66,9 +66,12 @@ parser.add_argument("--bias_std", type=float, dest="bias_field_std", default=0.7
 parser.add_argument("--bias_prob", type=float, dest="bias_prob", default=0.9,
                     help="probability of applying the sampled field. The rest of the images are left "
                          "clean, with target 0.")
-parser.add_argument("--bias_scale", type=float, dest="bias_scale", default=.025,
+parser.add_argument("--bias_scale", type=float, nargs='+', dest="bias_scale", default=[.025],
                     help="ratio between the label map size and the sampled bias tensor, i.e. how smooth "
-                         "the field is")
+                         "the field is. Several values: one of them is drawn per minibatch.")
+parser.add_argument("--bias_align_corners", action='store_true', dest="bias_align_corners",
+                    help="put the first and last values of the small bias tensor on the first and last voxels "
+                         "of each axis. Without it the last 1/k of each axis gets a constant field.")
 parser.add_argument("--bias_field_after_gamma", action='store_true', dest="bias_field_after_gamma",
                     help="apply the bias field after the gamma augmentation, so that the severity "
                          "recorded is the severity the network sees. The default order is "
