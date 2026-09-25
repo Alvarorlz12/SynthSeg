@@ -56,6 +56,7 @@ import re
 import csv
 import numpy as np
 import matplotlib.pyplot as plt
+import keras.backend as K
 
 # project imports
 from QC.predict_tm import predict_tm
@@ -141,6 +142,8 @@ def validate_training(image_dir,
                        min_vox=min_vox,
                        recompute=True,
                        verbose=False)
+            # free the previous checkpoint's graph to avoid running out of GPU memory
+            K.clear_session()
 
 
 def read_scores(path_csv, column='abs_err', subjects=None):
