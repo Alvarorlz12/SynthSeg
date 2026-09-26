@@ -12,6 +12,9 @@ Three geometries, i.e. how the n source slices meet the spacing k:
     synthseg kernel only.
   * edge: the first and last slices are repeated up to a multiple of k, then thickened at exactly k.
 
+--coverage trims the thickened axis to that many mm around its centre (144 mm at 6 mm = the 24 slices of the
+OASIS-3 FLAIR), so predict_rs has to pad or crop it.
+
 The header is the source's with the slice axis scaled by the spacing, since validate_rs reads the truth from it.
 Writes <out>/img/*.nii.gz and <out>/manifest.csv. Existing volumes are not rewritten unless --overwrite.
 
@@ -41,7 +44,7 @@ T1_ZOOMS = '1.00|1.00|1.00'
 FLAIR_ZOOMS = '1.00|0.98|0.98'
 DIRECTIONS = {'axial': 'SI', 'sagittal': 'RL'}   # the RAS letters of the thickened axis
 MANIFEST = ['file', 'stem', 'session', 'modality', 'direction', 'kernel', 'geometry', 'k', 'array_axis',
-            'thickness_drawn_vox', 'spacing_mm', 'shape', 'zooms']
+            'thickness_drawn_vox', 'spacing_mm', 'shape', 'zooms', 'coverage_mm']
 
 
 def select_sessions(inventory, n, seed):
@@ -170,7 +173,7 @@ def build(a):
                                                     if k > 1 and not (g == 'stretch' and kn == 'box')]
             for j, (direction, kernel, k, geometry) in enumerate(jobs):
                 axis = slice_axis(img.affine, direction if direction != 'none' else 'axial')
-                tail = '' if geometry == 'crop' else '_' + geometry
+                tail = ('' if geometry == 'crop' else '_' + geometry) + ('_cov%d' % a.coverage if a.coverage else '')
                 name = '%s_k1.nii.gz' % stem if k == 1 else '%s_%s_%s%s_k%d.nii.gz' % (stem, direction, kernel, tail, k)
                 path = os.path.join(img_dir, name)
                 if os.path.isfile(path) and not a.overwrite and name in old:
@@ -178,13 +181,20 @@ def build(a):
                     continue
                 seed = a.seed * 100000 + i * 1000 + m * 100 + j
                 thick_vol, offset, thick, spacing = thicken(vol, axis, k, kernel, seed, a.max_res, cache, geometry)
+                if a.coverage and k > 1:
+                    n = thick_vol.shape[axis]
+                    keep = min(int(a.coverage / (spacing * zooms[axis]) + 1e-6), n)
+                    start = (n - keep) // 2
+                    thick_vol = np.take(thick_vol, np.arange(start, start + keep), axis=axis)
+                    offset += start * spacing
                 out = write(thick_vol, img, axis, spacing, offset, path)
                 rows.append(dict(file=name, stem=stem, session=session, modality=modality, direction=direction,
                                  kernel=kernel, geometry=geometry, k=k, array_axis=axis,
                                  thickness_drawn_vox='%.3f' % thick,
                                  spacing_mm='%.3f' % (spacing * zooms[axis]),
                                  shape='x'.join(map(str, out.shape[:3])),
-                                 zooms='|'.join('%.3f' % z for z in out.header.get_zooms()[:3])))
+                                 zooms='|'.join('%.3f' % z for z in out.header.get_zooms()[:3]),
+                                 coverage_mm='%.1f' % (out.shape[axis] * spacing * zooms[axis])))
         print('  %2d/%d %s  (%d volumes so far)' % (i + 1, len(sessions), session, len(rows)), flush=True)
     with open(os.path.join(a.out, 'manifest.csv'), 'w', newline='') as fh:
         w = csv.DictWriter(fh, fieldnames=MANIFEST)
@@ -206,6 +216,7 @@ def main():
     p.add_argument('--kernels', nargs='+', default=['synthseg', 'box'], choices=['synthseg', 'box'])
     p.add_argument('--geometries', nargs='+', default=['crop'], choices=['crop', 'stretch', 'edge'],
                    help='how the slice axis meets k (see the docstring). stretch skips the box kernel')
+    p.add_argument('--coverage', type=float, default=None, help='trim the thickened axis to this many mm')
     p.add_argument('--max_res', type=float, default=8.,
                    help='max(MAX_RES_ISO, MAX_RES_ANISO) of the rs runs: sets the blur window, as in training')
     p.add_argument('--seed', type=int, default=0)
