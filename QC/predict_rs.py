@@ -77,7 +77,7 @@ def predict_rs(path_images,
                cropping=160,
                target_res=1.,
                minmax_norm=False,
-               pad_mode='edge',
+               pad_mode='constant',
                n_levels=5,
                nb_conv_per_level=3,
                conv_size=5,
@@ -108,9 +108,9 @@ def predict_rs(path_images,
     :param minmax_norm: (optional) normalise with an exact min-max instead of predict.py's p0.5-p99.5.
     Default is False, i.e. the percentile predict_tm and SynthSeg deploy with; the min-max is what
     training ends on, so this flag measures that gap.
-    :param pad_mode: (optional) how an axis shorter than the window is filled: 'edge' repeats the outermost
-    plane, 'constant' pads with zeros as predict.py does. Training never pads, so a band of zeros is something
-    the network has not seen. Default is 'edge'. The csv gives the padding per axis (pad_R/A/S), and valid = 0
+    :param pad_mode: (optional) how an axis shorter than the window is filled: 'constant' pads with zeros as
+    predict.py does, 'edge' repeats the outermost plane. Training never pads, so neither is something the
+    network has seen. Default is 'constant'. The csv gives the padding per axis (pad_R/A/S), and valid = 0
     when any axis is padded by more than PAD_TOL.
 
     :param n_levels: (optional) number of levels of the encoder. Default is 5.
@@ -265,7 +265,7 @@ def prepare_output_files(path_images, out_csv, out_resampled):
 
 
 def preprocess(path_image, n_levels, target_res, crop=None, min_pad=None, minmax_norm=False,
-               pad_mode='edge', path_resample=None):
+               pad_mode='constant', path_resample=None):
     """predict_tm's, minus the second volume, with the header's spacing captured before the resampling
     and permuted into the network's axis order."""
 
