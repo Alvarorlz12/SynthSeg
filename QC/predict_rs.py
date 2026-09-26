@@ -86,7 +86,8 @@ def predict_rs(path_images,
                activation='relu',
                norm='instance',
                recompute=True,
-               verbose=True):
+               verbose=True,
+               prepared=None):
     """
     Predict the per-axis voxel spacing the content of a real image sits at.
 
@@ -126,6 +127,9 @@ def predict_rs(path_images,
     and a mismatch is refused rather than silently loaded. Default is 'instance'.
     :param recompute: (optional) whether to overwrite an existing output csv. Default is True.
     :param verbose: (optional) print one line per image. Default is True.
+    :param prepared: (optional) the output of prepare_all for these same images and preprocessing arguments,
+    one entry per image in the order prepare_output_files lists them. validate_rs passes it so that the
+    resampling, which dominates the cost, is paid once per validation set and not once per checkpoint.
     """
 
     # prepare input/output filepaths
@@ -157,15 +161,11 @@ def predict_rs(path_images,
                          activation=activation,
                          norm=norm)
 
-    # the padding follows the crop, so the network sees the window --cropping asks for; a larger min_pad
-    # would be clamped.
-    if cropping is not None:
-        cropping = utils.reformat_to_list(cropping, length=3, dtype='int')
-        min_pad = cropping
-    else:
-        min_pad = 128
-    print('preprocessing: cropping=%s  target_res=%s  minmax_norm=%s  pad_mode=%s  norm=%s'
-          % (cropping, target_res, minmax_norm, pad_mode, norm))
+    cropping, min_pad = window(cropping)
+    print('preprocessing: cropping=%s  target_res=%s  minmax_norm=%s  pad_mode=%s  norm=%s%s'
+          % (cropping, target_res, minmax_norm, pad_mode, norm, '  (prepared once, cached)' if prepared else ''))
+    assert prepared is None or len(prepared) == len(path_images), \
+        '%d prepared volumes for %d images' % (len(prepared), len(path_images))
 
     # perform prediction
     if len(path_images) <= 10:
@@ -178,14 +178,17 @@ def predict_rs(path_images,
 
         # preprocessing. res_true is the header's spacing, permuted into the network's axis order and read
         # before the resampling.
-        image, res_true, ras_axes, pad = preprocess(path_image=path_images[i],
-                                     n_levels=n_levels,
-                                     target_res=target_res,
-                                     crop=cropping,
-                                     min_pad=min_pad,
-                                     minmax_norm=minmax_norm,
-                                     pad_mode=pad_mode,
-                                     path_resample=path_resampled[i])
+        if prepared is not None:
+            image, res_true, ras_axes, pad = prepared[i]
+        else:
+            image, res_true, ras_axes, pad = preprocess(path_image=path_images[i],
+                                         n_levels=n_levels,
+                                         target_res=target_res,
+                                         crop=cropping,
+                                         min_pad=min_pad,
+                                         minmax_norm=minmax_norm,
+                                         pad_mode=pad_mode,
+                                         path_resample=path_resampled[i])
 
         # prediction. the net returns the deficit s - atlas_res, kept at or above 0 by the relu on the
         # last head conv; read it back as a spacing on the grid the image now sits on.
@@ -208,6 +211,23 @@ def predict_rs(path_images,
         write_csv(path_out, row, True, np.arange(len(header)), np.array(header), skip_first=False)
 
     print('\nwrote %s' % path_out)
+
+
+def window(cropping):
+    """The crop and the padding the network sees. The padding follows the crop, so the network sees the
+    window --cropping asks for; a larger min_pad would be clamped."""
+    if cropping is not None:
+        cropping = utils.reformat_to_list(cropping, length=3, dtype='int')
+        return cropping, cropping
+    return None, 128
+
+
+def prepare_all(path_images, n_levels, target_res, cropping=160, minmax_norm=False, pad_mode='constant'):
+    """preprocess over a list of images, for predict_rs's prepared argument: the same call predict_rs makes
+    per image, so a cached volume is bit-identical to the one it would compute."""
+    cropping, min_pad = window(cropping)
+    return [preprocess(path_image=p, n_levels=n_levels, target_res=target_res, crop=cropping, min_pad=min_pad,
+                       minmax_norm=minmax_norm, pad_mode=pad_mode) for p in path_images]
 
 
 def prepare_output_files(path_images, out_csv, out_resampled):

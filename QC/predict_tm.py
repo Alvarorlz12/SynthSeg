@@ -87,7 +87,8 @@ def predict_tm(path_images,
                norm='instance',
                min_vox=8,
                recompute=True,
-               verbose=True):
+               verbose=True,
+               prepared=None):
     """
     Predict the per-tissue mean intensity, and the GM-WM contrast built from it, on real images.
 
@@ -129,6 +130,9 @@ def predict_tm(path_images,
     ground truth columns rather than averaged over nothing. Default is 8, training's own gate.
     :param recompute: (optional) whether to overwrite an existing output csv. Default is True.
     :param verbose: (optional) print one line per image. Default is True.
+    :param prepared: (optional) the output of prepare_all for these same images, ground truths and preprocessing
+    arguments, one entry per image in the order prepare_output_files pairs them. validate_tm passes it so that
+    the resampling, which dominates the cost, is paid once per validation set and not once per checkpoint.
     """
 
     # prepare input/output filepaths
@@ -139,10 +143,7 @@ def predict_tm(path_images,
         return
 
     # prepare the tissue list, and check it against the groups the target is defined on
-    tissues = list(tm.tissue_groups) if tissues is None \
-        else [t.strip() for t in tissues.split(',')] if isinstance(tissues, str) else list(tissues)
-    for t in tissues:
-        assert t in tm.tissue_groups, 'unknown tissue %r, expected among %s' % (t, list(tm.tissue_groups))
+    tissues = resolve_tissues(tissues)
 
     # prepare the csv header, and write it now so a run that dies halfway still leaves a readable file
     header = list(tissues) + ['contrast']
@@ -163,13 +164,9 @@ def predict_tm(path_images,
                          activation=activation,
                          norm=norm)
 
-    # one window knob: the padding follows the crop, so the network always sees the window --cropping
-    # asks for whatever the head measured. A larger min_pad would be clamped, not honoured.
-    if cropping is not None:
-        cropping = utils.reformat_to_list(cropping, length=3, dtype='int')
-        min_pad = cropping
-    else:
-        min_pad = 128
+    cropping, min_pad = window(cropping)
+    assert prepared is None or len(prepared) == len(path_images), \
+        '%d prepared volumes for %d images' % (len(prepared), len(path_images))
 
     # perform prediction
     if len(path_images) <= 10:
@@ -180,14 +177,12 @@ def predict_tm(path_images,
         if verbose:
             loop_info.update(i)
 
-        # preprocessing
-        image, gt, aff, h, im_res, shape, pad_idx, crop_idx = preprocess(path_image=path_images[i],
-                                                                         n_levels=n_levels,
-                                                                         target_res=target_res,
-                                                                         path_gt=path_gts[i],
-                                                                         crop=cropping,
-                                                                         min_pad=min_pad,
-                                                                         path_resample=path_resampled[i])
+        # preprocessing, and the truth read off the segmentation when there is one
+        if prepared is not None:
+            image, truth = prepared[i]
+        else:
+            image, truth = prepare(path_images[i], path_gts[i], n_levels, target_res, cropping, min_pad, tissues,
+                                   min_vox, path_resample=path_resampled[i])
 
         # prediction
         mu_pred = np.asarray(net.predict(image))[0]
@@ -197,8 +192,8 @@ def predict_tm(path_images,
         # head while the network sees a 160^3 window is a different quantity, not a stricter one.
         row = [os.path.basename(path_images[i]).replace('.nii.gz', '').replace('.nii', '').replace('.mgz', '')]
         row += ['%.6f' % v for v in mu_pred] + ['%.6f' % contrast(mu_pred, tissues)]
-        if gt is not None:
-            mu_true, counts = tissue_means(image[0, ..., 0], gt, tissues, min_vox)
+        if truth is not None:
+            mu_true, counts = truth
             c_true = contrast(mu_true, tissues)
             row += ['' if np.isnan(v) else '%.6f' % v for v in mu_true]
             row += ['' if np.isnan(c_true) else '%.6f' % c_true]
@@ -211,6 +206,44 @@ def predict_tm(path_images,
         write_csv(path_out, row, True, np.arange(len(header)), np.array(header), skip_first=False)
 
     print('\nwrote %s' % path_out)
+
+
+def resolve_tissues(tissues):
+    """None means every group, in the dict's order; a comma-separated string or a list is checked against
+    the groups the target is defined on."""
+    tissues = list(tm.tissue_groups) if tissues is None \
+        else [t.strip() for t in tissues.split(',')] if isinstance(tissues, str) else list(tissues)
+    for t in tissues:
+        assert t in tm.tissue_groups, 'unknown tissue %r, expected among %s' % (t, list(tm.tissue_groups))
+    return tissues
+
+
+def window(cropping):
+    """One window knob: the padding follows the crop, so the network always sees the window --cropping
+    asks for whatever the head measured. A larger min_pad would be clamped, not honoured."""
+    if cropping is not None:
+        cropping = utils.reformat_to_list(cropping, length=3, dtype='int')
+        return cropping, cropping
+    return None, 128
+
+
+def prepare(path_image, path_gt, n_levels, target_res, cropping, min_pad, tissues, min_vox, path_resample=None):
+    """One image as predict_tm feeds it to the network, and the truth (mu_true, counts) read off its
+    segmentation on the same crop of the same normalised volume, or None without a segmentation."""
+    image, gt = preprocess(path_image=path_image, n_levels=n_levels, target_res=target_res, path_gt=path_gt,
+                           crop=cropping, min_pad=min_pad, path_resample=path_resample)[:2]
+    truth = tissue_means(image[0, ..., 0], gt, tissues, min_vox) if gt is not None else None
+    return image, truth
+
+
+def prepare_all(path_images, path_gts, n_levels, target_res, cropping=160, tissues=None, min_vox=8):
+    """prepare over a list of images, for predict_tm's prepared argument: the same call predict_tm makes
+    per image, so a cached volume and its truth are bit-identical to the ones it would compute. Only the
+    image and the tissue means are kept, not the segmentation."""
+    cropping, min_pad = window(cropping)
+    tissues = resolve_tissues(tissues)
+    return [prepare(p, g, n_levels, target_res, cropping, min_pad, tissues, min_vox)
+            for p, g in zip(path_images, path_gts)]
 
 
 def prepare_output_files(path_images, out_csv, gt_folder, out_resampled):

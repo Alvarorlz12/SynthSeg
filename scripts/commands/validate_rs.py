@@ -10,11 +10,9 @@ There is no gt_dir: the truth for this head is the voxel spacing in each image's
       <data>/qc-data/validation/scores/resolution/rs_a --norm instance
 
 Results land in <validation_main_dir>/rs_<epoch>/rs_results.csv, one per checkpoint. A checkpoint
-whose csv exists is skipped unless --recompute, so the job is resumable.
-
-Do not read the resulting curve in aggregate: the loss weights the coarse end by s^2 while the QC
-call is made in (1, 2] mm. The csv keeps true_R/A/S per image, so the bands can be cut afterwards.
-See the header of QC/validate_rs.py.
+whose csv exists with one row per image is skipped unless --recompute, so the job is resumable.
+--ckpts validates the listed checkpoints instead of every rs_*.h5 of models_dir, in the same process,
+so the preprocessed images are shared by all of them. See the header of QC/validate_rs.py.
 
 If you use this code, please cite one of the SynthSeg papers:
 https://github.com/BBillot/SynthSeg/blob/master/bibtex.bib
@@ -74,6 +72,11 @@ parser.add_argument("--norm", type=str, dest="norm", default='instance', choices
 # Misc
 parser.add_argument("--recompute", action='store_true', dest="recompute",
                     help="redo checkpoints that already have an rs_results.csv instead of skipping them")
+parser.add_argument("--cache", type=str, dest="cache", default='auto', choices=['auto', 'on', 'off'],
+                    help="keep the preprocessed images in memory across checkpoints: auto (when they fit in half "
+                         "the job's memory), on or off. Default auto")
+parser.add_argument("--ckpts", type=str, nargs='+', dest="ckpts", default=None,
+                    help="checkpoint paths to validate instead of every rs_*.h5 of models_dir (then ignored)")
 
 args = vars(parser.parse_args())
 if args.pop('no_resample'):

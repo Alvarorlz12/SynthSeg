@@ -12,11 +12,14 @@ The validation set has to be images nobody has resampled. FreeSurfer --conform'd
 every axis whatever they were acquired at, so every true deficit is 0 and a relu head scores perfectly
 by answering 0: point this at the raw BIDS, and at a set that spans the range.
 
-Do not score this in aggregate. The training loss is a plain mse on the deficit in millimetres, so a
-relative error is weighted by s^2 and the coarse end carries most of it, while the QC call is made in
-(1, 2] mm. The csv keeps true_R/A/S per image so the bands can be cut afterwards from the same files:
-use the subjects argument of read_scores, or group on the true columns. The curve is paired: the same
-images against their own headers at every epoch, so it ranks epochs without measuring performance.
+The error is in millimetres, so in a plain mean over images the coarse ones weigh more: which images the
+set holds decides what the curve rewards. The csv keeps true_R/A/S per image so the error can be broken
+down by thickness afterwards: use the subjects argument of read_scores, or group on the true columns. The
+curve is paired: the same images against their own headers at every epoch, so it ranks epochs without
+measuring performance.
+
+The preprocessing is the same at every checkpoint and the resampling dominates it, so by default the
+prepared volumes are kept in memory for the whole sweep when they fit (see QC/validation_cache.py).
 
 Usage, from a script or a notebook:
 
@@ -46,7 +49,8 @@ import matplotlib.pyplot as plt
 import keras.backend as K
 
 # project imports
-from QC.predict_rs import predict_rs, AXES
+from QC.predict_rs import predict_rs, prepare_all, prepare_output_files, window, AXES
+from QC import validation_cache
 
 # third-party imports
 from ext.lab2im import utils
@@ -67,7 +71,9 @@ def validate_training(image_dir,
                       feat_multiplier=2,
                       activation='relu',
                       norm='instance',
-                      recompute=False):
+                      recompute=False,
+                      cache='auto',
+                      ckpts=None):
     """This function validates models saved at different epochs of the same training.
     All models are assumed to be in the same folder.
     The results of each model are saved in a subfolder in validation_main_dir.
@@ -94,23 +100,45 @@ def validate_training(image_dir,
     :param norm: (optional) the normalisation the checkpoints were trained with, among 'instance', 'batch' and
     'none'. It is an architecture argument: a mismatch is refused by load_weights_checked rather than silently
     loaded. Default is 'instance'.
-    :param recompute: (optional) whether to recompute result files even if they already exist."""
+    :param recompute: (optional) whether to recompute result files even if they already exist. A csv with fewer
+    rows than images (a checkpoint killed halfway) is always recomputed.
+    :param cache: (optional) 'auto' keeps the prepared volumes in memory across checkpoints when they fit in half
+    the job's memory budget, 'on' forces it, 'off' preprocesses again at every checkpoint. Default is 'auto'.
+    :param ckpts: (optional) list of checkpoint paths to validate instead of every rs_*.h5 of models_dir, which
+    is then ignored (and so is step_eval)."""
 
     # create result folder
     utils.mkdir(validation_main_dir)
 
-    # loop over models
-    list_models = utils.list_files(models_dir, expr=['rs', '.h5'], cond_type='and')[::step_eval]
-    loop_info = utils.LoopInfo(len(list_models), 1, 'validating', True)
-    for model_idx, path_model in enumerate(list_models):
+    # the images, in the order predict_rs will list them, and the checkpoints still to do
+    path_images = prepare_output_files(image_dir, os.path.join(validation_main_dir, 'rs_results.csv'), None)[0]
+    if ckpts is not None:
+        list_models = list(ckpts)
+    else:
+        list_models = utils.list_files(models_dir, expr=['rs', '.h5'], cond_type='and')[::step_eval]
+    score_paths = [os.path.join(validation_main_dir, os.path.basename(p).replace('.h5', ''), 'rs_results.csv')
+                   for p in list_models]
+    todo = [recompute or not validation_cache.complete(s, len(path_images)) for s in score_paths]
+    print('%d checkpoints, %d to do, %d images' % (len(list_models), sum(todo), len(path_images)))
+    if not any(todo):
+        return
 
-        # build names and create folders
-        model_val_dir = os.path.join(validation_main_dir, os.path.basename(path_model).replace('.h5', ''))
-        score_path = os.path.join(model_val_dir, 'rs_results.csv')
-        utils.mkdir(model_val_dir)
+    # preprocess once for the whole sweep when it fits in memory
+    prepared = None
+    if validation_cache.decide(cache, len(path_images), window(cropping)[0]):
+        prepared = prepare_all(path_images, n_levels, target_res, cropping=cropping, minmax_norm=minmax_norm,
+                               pad_mode=pad_mode)
+        print('prepared %d volumes, %.2f GB' % (len(prepared), sum(p[0].nbytes for p in prepared) / 1e9))
 
-        if (not os.path.isfile(score_path)) | recompute:
-            loop_info.update(model_idx)
+    # loop over models. the counter runs over the checkpoints to do only: LoopInfo cannot start past 0
+    loop_info = utils.LoopInfo(sum(todo), 1, 'validating', True)
+    n_done = 0
+    for model_idx, (path_model, score_path) in enumerate(zip(list_models, score_paths)):
+
+        if todo[model_idx]:
+            utils.mkdir(os.path.dirname(score_path))
+            loop_info.update(n_done)
+            n_done += 1
             predict_rs(path_images=image_dir,
                        path_out=score_path,
                        path_model=path_model,
@@ -126,7 +154,8 @@ def validate_training(image_dir,
                        activation=activation,
                        norm=norm,
                        recompute=True,
-                       verbose=False)
+                       verbose=False,
+                       prepared=prepared)
             # free the previous checkpoint's graph to avoid running out of GPU memory
             K.clear_session()
 

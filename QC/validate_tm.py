@@ -30,6 +30,10 @@ curve is PAIRED -- the same ten images, against the same anchor, at every epoch 
 variance and the anchor's own bias are common to every point and cancel in the comparison. It ranks
 epochs. It does not measure performance, and no headline should come out of it.
 
+The preprocessing is the same at every checkpoint and the resampling dominates it, so by default the
+prepared volumes and their tissue means are kept in memory for the whole sweep when they fit (see
+QC/validation_cache.py).
+
 Usage, from a script or a notebook:
 
     from QC import validate_tm
@@ -59,7 +63,8 @@ import matplotlib.pyplot as plt
 import keras.backend as K
 
 # project imports
-from QC.predict_tm import predict_tm
+from QC.predict_tm import predict_tm, prepare_all, prepare_output_files, window
+from QC import validation_cache
 
 # third-party imports
 from ext.lab2im import utils
@@ -81,7 +86,8 @@ def validate_training(image_dir,
                       activation='relu',
                       norm='instance',
                       min_vox=8,
-                      recompute=False):
+                      recompute=False,
+                      cache='auto'):
     """This function validates models saved at different epochs of the same training.
     All models are assumed to be in the same folder.
     The results of each model are saved in a subfolder in validation_main_dir.
@@ -108,23 +114,42 @@ def validate_training(image_dir,
     silently loaded. Default is 'instance'.
     :param min_vox: (optional) a tissue with fewer voxels than this in the crop is left blank in the ground truth
     columns rather than averaged over nothing. Default is 8, training's own gate.
-    :param recompute: (optional) whether to recompute result files even if they already exist."""
+    :param recompute: (optional) whether to recompute result files even if they already exist. A csv with fewer
+    rows than images (a checkpoint killed halfway) is always recomputed.
+    :param cache: (optional) 'auto' keeps the prepared volumes and their tissue means in memory across checkpoints
+    when they fit in half the job's memory budget, 'on' forces it, 'off' preprocesses again at every checkpoint.
+    Default is 'auto'."""
 
     # create result folder
     utils.mkdir(validation_main_dir)
 
-    # loop over models
+    # the image/segmentation pairs, in the order predict_tm will pair them, and the checkpoints still to do
+    path_images, _, path_gts, _ = prepare_output_files(image_dir, os.path.join(validation_main_dir, 'tm_results.csv'),
+                                                       gt_dir, None)
     list_models = utils.list_files(models_dir, expr=['tm', '.h5'], cond_type='and')[::step_eval]
-    loop_info = utils.LoopInfo(len(list_models), 1, 'validating', True)
-    for model_idx, path_model in enumerate(list_models):
+    score_paths = [os.path.join(validation_main_dir, os.path.basename(p).replace('.h5', ''), 'tm_results.csv')
+                   for p in list_models]
+    todo = [recompute or not validation_cache.complete(s, len(path_images)) for s in score_paths]
+    print('%d checkpoints, %d to do, %d images' % (len(list_models), sum(todo), len(path_images)))
+    if not any(todo):
+        return
 
-        # build names and create folders
-        model_val_dir = os.path.join(validation_main_dir, os.path.basename(path_model).replace('.h5', ''))
-        score_path = os.path.join(model_val_dir, 'tm_results.csv')
-        utils.mkdir(model_val_dir)
+    # preprocess once for the whole sweep when it fits in memory
+    prepared = None
+    if validation_cache.decide(cache, len(path_images), window(cropping)[0]):
+        prepared = prepare_all(path_images, path_gts, n_levels, target_res, cropping=cropping, tissues=tissues,
+                               min_vox=min_vox)
+        print('prepared %d volumes, %.2f GB' % (len(prepared), sum(p[0].nbytes for p in prepared) / 1e9))
 
-        if (not os.path.isfile(score_path)) | recompute:
-            loop_info.update(model_idx)
+    # loop over models. the counter runs over the checkpoints to do only: LoopInfo cannot start past 0
+    loop_info = utils.LoopInfo(sum(todo), 1, 'validating', True)
+    n_done = 0
+    for model_idx, (path_model, score_path) in enumerate(zip(list_models, score_paths)):
+
+        if todo[model_idx]:
+            utils.mkdir(os.path.dirname(score_path))
+            loop_info.update(n_done)
+            n_done += 1
             predict_tm(path_images=image_dir,
                        path_out=score_path,
                        path_model=path_model,
@@ -141,7 +166,8 @@ def validate_training(image_dir,
                        norm=norm,
                        min_vox=min_vox,
                        recompute=True,
-                       verbose=False)
+                       verbose=False,
+                       prepared=prepared)
             # free the previous checkpoint's graph to avoid running out of GPU memory
             K.clear_session()
 

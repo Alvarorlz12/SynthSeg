@@ -10,8 +10,8 @@ trained with norm='none' holds no tm_enc_in_down_* layers at all, and load_weigh
 wrong one rather than loading it badly.
 
 Results land in <validation_main_dir>/tm_<epoch>/tm_results.csv, one per checkpoint, and a checkpoint
-whose csv already exists is skipped unless --recompute. The job is therefore resumable: relaunch it and
-it continues where the wall clock cut it off.
+whose csv already exists with one row per image is skipped unless --recompute. The job is therefore
+resumable: relaunch it and it continues where the wall clock cut it off.
 
   python scripts/commands/validate_tm.py \
       <data>/qc-data/validation/img <data>/qc-data/validation/gt/ss/segs \
@@ -74,6 +74,9 @@ parser.add_argument("--min_vox", type=int, dest="min_vox", default=8,
                     help="a tissue with fewer voxels than this in the crop is left blank in the gt columns")
 parser.add_argument("--recompute", action='store_true', dest="recompute",
                     help="redo checkpoints that already have a tm_results.csv instead of skipping them")
+parser.add_argument("--cache", type=str, dest="cache", default='auto', choices=['auto', 'on', 'off'],
+                    help="keep the preprocessed images in memory across checkpoints: auto (when they fit in half "
+                         "the job's memory), on or off. Default auto")
 
 args = vars(parser.parse_args())
 if args.pop('no_resample'):
