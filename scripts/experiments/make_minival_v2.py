@@ -181,7 +181,8 @@ def build(a):
     img = os.path.join(out, 'img')
     os.makedirs(img, exist_ok=True)
     for r in rows:
-        src = os.path.join(a.root, r['src']) if r['dataset'] == 'nifd' else os.path.join(a.adni_dir, r['src'])
+        # ADNI comes from the copy of the ICM tree; NIFD, IXI and MIRIAD are already under <root>/raw
+        src = os.path.join(a.adni_dir, r['src']) if r['dataset'] == 'adni' else os.path.join(a.root, r['src'])
         assert os.path.isfile(src), 'missing: %s' % src
         dst = os.path.join(img, os.path.basename(src))
         if not os.path.isfile(dst):
