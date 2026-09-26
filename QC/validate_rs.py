@@ -58,6 +58,7 @@ def validate_training(image_dir,
                       cropping=160,
                       target_res=1.,
                       minmax_norm=False,
+                      pad_mode='edge',
                       n_levels=5,
                       nb_conv_per_level=3,
                       conv_size=5,
@@ -81,6 +82,8 @@ def validate_training(image_dir,
     network a domain it never saw.
     :param minmax_norm: (optional) normalise with an exact min-max instead of predict.py's p0.5-p99.5. Default is
     False, i.e. the percentile predict_tm and SynthSeg deploy with.
+    :param pad_mode: (optional) how an axis shorter than the window is filled, 'edge' or 'constant' (zeros). See
+    predict_rs. Default is 'edge'.
     :param n_levels: (optional) number of levels of the encoder. Default is 5.
     :param nb_conv_per_level: (optional) number of convolutional layers per level. Default is 3.
     :param conv_size: (optional) size of the convolution kernels. Default is 5.
@@ -113,6 +116,7 @@ def validate_training(image_dir,
                        cropping=cropping,
                        target_res=target_res,
                        minmax_norm=minmax_norm,
+                       pad_mode=pad_mode,
                        n_levels=n_levels,
                        nb_conv_per_level=nb_conv_per_level,
                        conv_size=conv_size,

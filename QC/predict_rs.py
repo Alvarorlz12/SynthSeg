@@ -66,6 +66,9 @@ from ext.lab2im import edit_volumes
 # the array axes after the alignment to RAS, which is the order the network's three outputs come in.
 AXES = ['R', 'A', 'S']
 
+# padding (voxels) above which a prediction is flagged as not valid
+PAD_TOL = 2
+
 
 def predict_rs(path_images,
                path_out,
@@ -74,6 +77,7 @@ def predict_rs(path_images,
                cropping=160,
                target_res=1.,
                minmax_norm=False,
+               pad_mode='edge',
                n_levels=5,
                nb_conv_per_level=3,
                conv_size=5,
@@ -104,6 +108,10 @@ def predict_rs(path_images,
     :param minmax_norm: (optional) normalise with an exact min-max instead of predict.py's p0.5-p99.5.
     Default is False, i.e. the percentile predict_tm and SynthSeg deploy with; the min-max is what
     training ends on, so this flag measures that gap.
+    :param pad_mode: (optional) how an axis shorter than the window is filled: 'edge' repeats the outermost
+    plane, 'constant' pads with zeros as predict.py does. Training never pads, so a band of zeros is something
+    the network has not seen. Default is 'edge'. The csv gives the padding per axis (pad_R/A/S), and valid = 0
+    when any axis is padded by more than PAD_TOL.
 
     :param n_levels: (optional) number of levels of the encoder. Default is 5.
     :param nb_conv_per_level: (optional) number of convolutions per level. Default is 3.
@@ -132,7 +140,7 @@ def predict_rs(path_images,
     # write the csv header now, so a run that dies halfway still leaves a readable file. the true_*
     # columns are always written: they come out of the header, which every image carries.
     header = ['s_%s' % a for a in AXES] + ['true_%s' % a for a in AXES] + ['err_%s' % a for a in AXES]
-    header += ['abs_err', 'ras_axes']
+    header += ['abs_err', 'ras_axes', 'pad_R', 'pad_A', 'pad_S', 'valid']
     write_csv(path_out, None, True, np.arange(len(header)), np.array(header), skip_first=False)
 
     # the input shape is left free on the three spatial axes, as predict.py leaves it: the head is a spatial
@@ -154,6 +162,8 @@ def predict_rs(path_images,
         min_pad = cropping
     else:
         min_pad = 128
+    print('preprocessing: cropping=%s  target_res=%s  minmax_norm=%s  pad_mode=%s  norm=%s'
+          % (cropping, target_res, minmax_norm, pad_mode, norm))
 
     # perform prediction
     if len(path_images) <= 10:
@@ -166,12 +176,13 @@ def predict_rs(path_images,
 
         # preprocessing. res_true is the header's spacing, permuted into the network's axis order and read
         # before the resampling.
-        image, res_true, ras_axes = preprocess(path_image=path_images[i],
+        image, res_true, ras_axes, pad = preprocess(path_image=path_images[i],
                                      n_levels=n_levels,
                                      target_res=target_res,
                                      crop=cropping,
                                      min_pad=min_pad,
                                      minmax_norm=minmax_norm,
+                                     pad_mode=pad_mode,
                                      path_resample=path_resampled[i])
 
         # prediction. the net returns the deficit s - atlas_res, kept at or above 0 by the relu on the
@@ -188,6 +199,8 @@ def predict_rs(path_images,
         # the permutation that was applied, as a string so a spreadsheet cannot read it as a number:
         # '012' is the identity, '201' is the R spacing sitting on array axis 2.
         row += [''.join(str(a) for a in ras_axes)]
+        # padding per axis and validity flag
+        row += ['%d' % v for v in pad] + ['%d' % int(max(pad) <= PAD_TOL)]
 
         # write results to disk
         write_csv(path_out, row, True, np.arange(len(header)), np.array(header), skip_first=False)
@@ -252,7 +265,7 @@ def prepare_output_files(path_images, out_csv, out_resampled):
 
 
 def preprocess(path_image, n_levels, target_res, crop=None, min_pad=None, minmax_norm=False,
-               path_resample=None):
+               pad_mode='edge', path_resample=None):
     """predict_tm's, minus the second volume, with the header's spacing captured before the resampling
     and permuted into the network's axis order."""
 
@@ -307,12 +320,17 @@ def preprocess(path_image, n_levels, target_res, crop=None, min_pad=None, minmax
         min_pad = utils.reformat_to_list(min_pad, length=n_dims, dtype='int')
         min_pad = [utils.find_closest_number_divisible_by_m(s, 2 ** n_levels, 'higher') for s in min_pad]
         pad_shape = np.maximum(pad_shape, min_pad)
-    im = edit_volumes.pad_volume(im, padding_shape=pad_shape)
+    pad = [max(int(p) - s, 0) for p, s in zip(pad_shape, input_shape)]
+    if pad_mode == 'constant':
+        im = edit_volumes.pad_volume(im, padding_shape=pad_shape)
+    else:
+        # same margins as pad_volume, filled with the outermost plane
+        im = np.pad(im, [(p // 2, p - p // 2) for p in pad], mode=pad_mode)
 
     # add batch and channel axes
     im = utils.add_axis(im, axis=[0, -1])
 
-    return im, res_true, ras_axes
+    return im, res_true, ras_axes, pad
 
 
 def build_rs_model(path_model, input_shape, n_levels, nb_conv_per_level, conv_size, unet_feat_count,
