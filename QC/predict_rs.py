@@ -108,10 +108,12 @@ def predict_rs(path_images,
     :param minmax_norm: (optional) normalise with an exact min-max instead of predict.py's p0.5-p99.5.
     Default is False, i.e. the percentile predict_tm and SynthSeg deploy with; the min-max is what
     training ends on, so this flag measures that gap.
-    :param pad_mode: (optional) how an axis shorter than the window is filled: 'constant' pads with zeros as
-    predict.py does, 'edge' repeats the outermost plane. Training never pads, so neither is something the
-    network has seen. Default is 'constant'. The csv gives the padding per axis (pad_R/A/S), and valid = 0
-    when any axis is padded by more than PAD_TOL.
+    :param pad_mode: (optional) what is done with an axis shorter than the window: 'constant' pads it with zeros
+    as predict.py does, 'edge' pads it with the outermost plane, and 'auto' pads it with zeros when it is at
+    most PAD_TOL short and otherwise cuts it down to a multiple of 2 ** n_levels (144 -> 128). Training never
+    pads. Default is 'constant'. The csv
+    gives how far each axis falls short of the window (pad_R/A/S), and valid = 0 when any axis falls short by
+    more than PAD_TOL.
 
     :param n_levels: (optional) number of levels of the encoder. Default is 5.
     :param nb_conv_per_level: (optional) number of convolutions per level. Default is 3.
@@ -305,6 +307,14 @@ def preprocess(path_image, n_levels, target_res, crop=None, min_pad=None, minmax
         crop = utils.reformat_to_list(crop, length=n_dims, dtype='int')
         crop_shape = [utils.find_closest_number_divisible_by_m(s, 2 ** n_levels, 'higher') for s in crop]
         im = edit_volumes.crop_volume(im, cropping_shape=crop_shape)
+        if pad_mode == 'auto':
+            # an axis more than PAD_TOL short of the window is cut down to a multiple of 2 ** n_levels
+            short = [max(c - s, 0) for c, s in zip(crop_shape, im.shape[:n_dims])]
+            cut = [p > PAD_TOL for p in short]
+            im = edit_volumes.crop_volume(im, cropping_shape=[utils.find_closest_number_divisible_by_m(
+                s, 2 ** n_levels, 'lower') if c else s for s, c in zip(im.shape[:n_dims], cut)])
+    else:
+        assert pad_mode != 'auto', 'pad_mode auto needs a cropping window'
 
     # normalise, after the crop so the divisor is read off the window the network sees. p0.5-p99.5, as
     # predict.py and predict_tm do; --minmax_norm swaps in the exact min-max training ends on.
@@ -320,8 +330,10 @@ def preprocess(path_image, n_levels, target_res, crop=None, min_pad=None, minmax
         min_pad = utils.reformat_to_list(min_pad, length=n_dims, dtype='int')
         min_pad = [utils.find_closest_number_divisible_by_m(s, 2 ** n_levels, 'higher') for s in min_pad]
         pad_shape = np.maximum(pad_shape, min_pad)
+    if pad_mode == 'auto':
+        pad_shape = [s if c else p for s, p, c in zip(input_shape, pad_shape, cut)]
     pad = [max(int(p) - s, 0) for p, s in zip(pad_shape, input_shape)]
-    if pad_mode == 'constant':
+    if pad_mode in ('constant', 'auto'):
         im = edit_volumes.pad_volume(im, padding_shape=pad_shape)
     else:
         # same margins as pad_volume, filled with the outermost plane
@@ -330,6 +342,8 @@ def preprocess(path_image, n_levels, target_res, crop=None, min_pad=None, minmax
     # add batch and channel axes
     im = utils.add_axis(im, axis=[0, -1])
 
+    if pad_mode == 'auto':
+        pad = short
     return im, res_true, ras_axes, pad
 
 

@@ -53,9 +53,10 @@ parser.add_argument("--no_resample", action='store_true', dest="no_resample",
 parser.add_argument("--minmax_norm", action='store_true', dest="minmax_norm",
                     help="normalise with an exact min-max instead of the p0.5-p99.5 default of "
                          "predict.py. The min-max is what training ends on")
-parser.add_argument("--pad_mode", type=str, dest="pad_mode", default='constant', choices=['constant', 'edge'],
-                    help="how an axis shorter than the window is filled: zeros (constant, default, as in "
-                         "predict.py) or the outermost plane repeated (edge)")
+parser.add_argument("--pad_mode", type=str, dest="pad_mode", default='constant', choices=['constant', 'edge', 'auto'],
+                    help="what is done with an axis shorter than the window: zeros (constant, default, as in "
+                         "predict.py), the outermost plane repeated (edge), or zeros up to 2 mm and cut down to a multiple of 32 "
+                         "beyond (auto)")
 
 # Architecture parameters
 parser.add_argument("--conv_size", type=int, dest="conv_size", default=5, help="size of the convolution kernels")

@@ -83,8 +83,8 @@ def validate_training(image_dir,
     network a domain it never saw.
     :param minmax_norm: (optional) normalise with an exact min-max instead of predict.py's p0.5-p99.5. Default is
     False, i.e. the percentile predict_tm and SynthSeg deploy with.
-    :param pad_mode: (optional) how an axis shorter than the window is filled, 'constant' (zeros) or 'edge'. See
-    predict_rs. Default is 'constant'.
+    :param pad_mode: (optional) what is done with an axis shorter than the window: 'constant' (zeros), 'edge' or
+    'auto'. See predict_rs. Default is 'constant'.
     :param n_levels: (optional) number of levels of the encoder. Default is 5.
     :param nb_conv_per_level: (optional) number of convolutional layers per level. Default is 3.
     :param conv_size: (optional) size of the convolution kernels. Default is 5.
