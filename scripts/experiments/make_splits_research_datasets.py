@@ -1,4 +1,4 @@
-"""Split the REAL datasets (IXI, Kirby21) into dev / test, at the level of SUBJECT.
+"""Split the real datasets into dev / test, at the level of the subject.
 
 Sibling of make_splits.py, which does the same for the synthetic label maps. Same guarantees --
 subject-level unit, hash assignment, a manifest that refuses to change in silence -- and three
@@ -6,11 +6,10 @@ differences that follow from these being evaluation-only data:
 
   1. There is no `train`. The networks are trained 100% on synthetic images, so what a real dataset
      needs is a set you are allowed to look at while deciding things (`dev`) and one that is read
-     once, for the report (`test`).
+     once, for the final numbers (`test`).
   2. Kirby21 goes entirely to `dev` and is not split. It has 21 subjects, so two halves would both
-     be useless; and it is already spent -- the transfer read, the divisor sweep and the --clip 300
-     decision were all taken while looking at it. A set already used to decide things is not a test
-     set. Its manifest still records the two sessions per subject, because scan-rescan is the one
+     be useless; and it has already been used to make decisions, which a test set cannot have been.
+     Its manifest still records the two sessions per subject, because scan-rescan is the one
      real-data metric that needs no anchor at all.
   3. The site is no longer in the filename. The BIDS conversion renamed IXI to `sub-IXINNN` and
      dropped it; it survives in `unorganised/IXI-T{1,2}/IXINNN-<Site>-...`. So the site is recovered
@@ -18,12 +17,13 @@ differences that follow from these being evaluation-only data:
      subject whose site cannot be recovered cannot be stratified, and is reported and left out
      instead of being quietly dropped into some group.
 
-IXI ships no participants.tsv of its own, and the two folders that still carry the site live on a
-different cluster from everything else. So the site table is built ONCE, from a listing of those two
-folders, and after that nothing reaches across clusters:
+IXI ships no participants.tsv of its own, and the site survives only in the two folders of the
+original unorganised release, which need not sit next to the BIDS copy. So the site table is built
+once, from a listing of those two folders, and nothing afterwards needs the original tree:
 
-  there    ls -1 unorganised/IXI-T1 > t1.txt ; ls -1 unorganised/IXI-T2 > t2.txt   (copy both over)
-  here     ... participants --t1_list t1.txt --t2_list t2.txt --bids <.../raw/ixi/bids> \n                            --out <.../index/ixi>
+  step 1   ls -1 unorganised/IXI-T1 > t1.txt ; ls -1 unorganised/IXI-T2 > t2.txt
+  step 2   ... participants --t1_list t1.txt --t2_list t2.txt --bids <.../raw/ixi/bids> \
+                            --out <.../index/ixi>
            ... ixi --participants <.../index/ixi/participants.tsv> ...
 
 `participants` also copies the two listings, verbatim, next to the table it derives. The table is a
@@ -41,8 +41,9 @@ Usage
   table   python scripts/experiments/make_splits_research_datasets.py participants \
               --t1_list t1.txt [--t2_list t2.txt] --bids <.../raw/ixi/bids> --out <.../index/ixi>
 
-          `source_t1`/`source_t2` in the table are the filenames on the OTHER cluster and do not
-          resolve here: they are provenance, and they are where the site comes from. `bids_t1`/
+          `source_t1`/`source_t2` in the table are the filenames in the original unorganised
+          release and do not resolve against the BIDS tree: they are provenance, and they are
+          where the site comes from. `bids_t1`/
           `bids_t2` are the paths that exist here, and they are what decides which modalities of a
           subject can be scored. The two are reported against each other, because a conversion that
           dropped a volume would otherwise show up as a modality that silently never gets read.
@@ -55,7 +56,11 @@ Usage
   Kirby   python scripts/experiments/make_splits_research_datasets.py kirby21 \
               --index <.../index/kirby21/fsorig> --out <.../index/kirby21/splits> [--force]
 
-The manifest holds one row per SUBJECT, which is one row per decision. `volumes.csv` keeps one row
+  BIDS    python scripts/experiments/make_splits_research_datasets.py bids --dataset <ds> \
+              --bids <.../raw/<ds>/bids> --out <.../index/<ds>/splits> [--fs <.../subjects>] \
+              [--stratify site] [--thickness] [--n_dev 100] [--seed 0] [--force]
+
+The manifest holds one row per subject, which is one row per decision. `volumes.csv` keeps one row
 per (volume x anchor) and picks the split up by joining on `subject`: a derived column there cannot
 contradict itself, because the authority is here.
 """
@@ -77,10 +82,12 @@ RE_IXI_BIDS = re.compile(r'^sub-IXI(\d+)$')
 RE_IXI_SEG = re.compile(r'^sub-IXI(\d+)_T([12])w_synthseg\.nii\.gz$')
 RE_KIRBY = re.compile(r'^sub-(KKI\d+)_ses-(\d+)_T1w\.mgz$')
 
-FIELDS = ('dataset', 'subject', 'site', 'modalities', 'n_sessions', 'stratum', 'split')
-# `source_*` are the filenames on the OTHER cluster: provenance. They carry the site and the scan
-# id, and they do NOT resolve here. `bids_*` are the paths that exist on this one, relative to the
-# BIDS root, and they are what says whether a modality can actually be scored.
+# DictWriter fills a missing key with restval but raises on an extra one, so a column only used by
+# one planner has to live here anyway; the planners that do not compute it leave it blank.
+FIELDS = ('dataset', 'subject', 'site', 'modalities', 'n_sessions', 'thickness', 'stratum', 'split')
+# `source_*` are the filenames in the original unorganised release: provenance. They carry the site
+# and the scan id, and they do not resolve against the BIDS tree. `bids_*` are the paths that exist
+# in it, relative to the BIDS root, and they say whether a modality can actually be scored.
 PART_FIELDS = ('participant_id', 'ixi_id', 'site',
                'source_t1', 'source_t2', 'bids_t1', 'bids_t2')
 
@@ -279,7 +286,7 @@ def _sites_from_participants(path):
     site, mods = {}, {}
     for r in rows:
         site[r['ixi_id']] = r['site']
-        # what can be scored is what exists HERE. The listing is only where the site came from.
+        # what can be scored is what exists here. The listing is only where the site came from.
         have = [m for m in ('T1', 'T2') if r['bids_%s' % m.lower()]]
         if have and r['site']:
             mods[r['ixi_id']] = {m: r['site'] for m in have}
@@ -335,7 +342,7 @@ def plan_ixi(participants, t1, t2, bids, segs, out, n_dev, seed, require_seg, fo
             no_seg.append(sid)
             continue
         site = next(iter(raw[sid].values()))
-        # the stratum is the SITE and not site x modality. Modality availability is ~constant here
+        # the stratum is the site and not site x modality. Modality availability is ~constant here
         # (577 of 582 have both), so stratifying on it would create cells of 1 and 4 subjects, which
         # stratify nothing and only perturb the allocation. It stays as a reported column.
         rows.append(dict(dataset='ixi', subject='sub-IXI%s' % sid, site=site,
@@ -399,7 +406,7 @@ def plan_kirby(index, out, force):
 
 # =================================================================================================
 RE_BIDS_SUB = re.compile(r'^(sub-[A-Za-z0-9]+)$')
-# BIDS names are <sub>[_<key>-<value>]*_<suffix>.nii[.gz]. Capturing the middle as ONE group of
+# BIDS names are <sub>[_<key>-<value>]*_<suffix>.nii[.gz]. Capturing the middle as one group of
 # key-value entities instead of only ses- is what lets miriad in: its files carry run-1/run-2
 # between the session and the suffix, and a regex that expects <sub>_<ses>_<suffix> matches
 # nothing at all there -- it fails by finding zero files, not by erroring.
@@ -408,9 +415,9 @@ RE_ENTITY_SES = re.compile(r'_(ses-[A-Za-z0-9]+)')
 
 
 def _fs_sessions(fs, subject, sessions, fs_seg='aseg.mgz'):
-    """Sessions of one subject that have a CROSS-SECTIONAL FreeSurfer run.
+    """Sessions of one subject that have a cross-sectional FreeSurfer run.
 
-    Assembled, never globbed. `long-*` is the longitudinal stream and MEASURED on nifd, over ARAMIS'
+    Assembled, never globbed. `long-*` is the longitudinal stream; measured on nifd over its
     own 304 session pairs, it lifts GM Dice from 0.856 to 0.925: it exists to make a subject's sessions
     agree, so anchoring on it measures the regulariser instead of the method.
     """
@@ -423,8 +430,8 @@ def _fs_sessions(fs, subject, sessions, fs_seg='aseg.mgz'):
     return hit
 
 
-def plan_bids(dataset, bids, fs, segs, out, n_dev, seed, force, stratify=('site',)):
-    subs = {}                                     # subject -> {modality: {sessions}}
+def plan_bids(dataset, bids, fs, segs, out, n_dev, seed, force, stratify=('site',), thickness=False):
+    subs, files = {}, {}                          # subject -> {modality: {sessions}} / [paths]
     for entry in sorted(os.listdir(bids)):
         if not RE_BIDS_SUB.match(entry) or not os.path.isdir(os.path.join(bids, entry)):
             continue
@@ -433,7 +440,24 @@ def plan_bids(dataset, bids, fs, segs, out, n_dev, seed, force, stratify=('site'
             if m and m.group(1) == entry:
                 ses = RE_ENTITY_SES.search(m.group(2) or '')
                 subs.setdefault(entry, {}).setdefault(m.group(3), set()).add(ses.group(1) if ses else '')
+                files.setdefault(entry, []).append(f)
     assert subs, 'no sub-*/**/anat/*.nii* under %s' % bids
+
+    # Slice thickness as part of the stratum, for the same reason FreeSurfer coverage is: it is what
+    # the resolution head predicts, and oasis3 is 720 volumes at 5 mm against 42 at 1 mm. Left to the
+    # hash, the thin end lands wherever it lands, and the one stratum that can tell "reads the image"
+    # from "answers a constant" is the smallest one. Headers only, no data is read.
+    thick_of = {}
+    if thickness:
+        import nibabel as nib
+        for sub, ps in files.items():
+            t = set()
+            for p in ps:
+                try:
+                    t.add(round(max(nib.load(p).header.get_zooms()[:3]), 1))
+                except Exception as e:
+                    print('  [WARNING] unreadable header, skipped: %s (%s)' % (p, e))
+            thick_of[sub] = '+'.join('%.1f' % v for v in sorted(t)) or 'NA'
 
     # participants.tsv is read for the WHOLE row, not just the site: --stratify names the columns
     # that go into the stratum. On a single-scanner cohort like miriad the site is constant and
@@ -452,12 +476,21 @@ def plan_bids(dataset, bids, fs, segs, out, n_dev, seed, force, stratify=('site'
         raise SystemExit('--stratify needs a participants.tsv under %s' % bids)
 
     print('== inventory: %s ==' % dataset)
-    per_mod = defaultdict(int)
+    # sessions and files are not the same count and the gap is not a loss: subs holds a set of
+    # sessions per modality, so two runs or two echoes of one session collapse into one. oasis3 is
+    # 1016 FLAIR files across 987 sessions. Both are printed because a reader who sees only one of
+    # them compares it against `find | wc -l` and concludes that volumes went missing.
+    per_mod, per_file = defaultdict(int), defaultdict(int)
     for v in subs.values():
         for mod, ss in v.items():
             per_mod[mod] += len(ss)
-    for mod in sorted(per_mod, key=lambda k: -per_mod[mod]):
-        print('  %-8s %5d volumes' % (mod, per_mod[mod]))
+    for sub, ps in files.items():
+        for p in ps:
+            m = RE_BIDS_IMG.match(os.path.basename(p))
+            if m:
+                per_file[m.group(3)] += 1
+    for mod in sorted(per_mod, key=lambda k: -per_mod[k]):
+        print('  %-8s %5d sessions  (%d files)' % (mod, per_mod[mod], per_file.get(mod, 0)))
     print('  %d subjects' % len(subs))
 
     rows, fs_subs = [], set()
@@ -469,14 +502,18 @@ def plan_bids(dataset, bids, fs, segs, out, n_dev, seed, force, stratify=('site'
             fs_subs.add(sub)
         meta = meta_of.get(sub, {})
         site = meta.get('site') or 'NA'
-        # the stratum carries FS coverage, not just the site. MEASURED on nifd: 948 T1w exist but only
+        # the stratum carries FS coverage, not just the site. Measured on nifd: 948 T1w exist but only
         # 494 sessions (172 subjects of 346) have a cross-sectional FreeSurfer run, so a split that
         # ignores it lands most of the FS-anchored subjects on one side and leaves that arm with a dev
         # or a test it cannot use.
         key = '|'.join((meta.get(c) or 'NA') for c in stratify)
-        stratum = '%s|%s' % (key, 'fs' if has_fs else 'nofs') if fs else key
+        if fs:
+            key = '%s|%s' % (key, 'fs' if has_fs else 'nofs')
+        if thickness:
+            key = '%s|%s' % (key, thick_of.get(sub, 'NA'))
         rows.append(dict(dataset=dataset, subject=sub, site=site, modalities='+'.join(mods),
-                         n_sessions=len(sessions), stratum=stratum, split=''))
+                         n_sessions=len(sessions), thickness=thick_of.get(sub, ''),
+                         stratum=key, split=''))
     if fs:
         print('  %d of %d subjects have a cross-sectional FreeSurfer run' % (len(fs_subs), len(rows)))
 
@@ -546,6 +583,10 @@ if __name__ == '__main__':
                    help='comma separated participants.tsv columns that make the stratum. Default '
                         'site. Use diagnosis on a single-scanner cohort, where the site is '
                         'constant and stratifying on it balances nothing.')
+    q.add_argument('--thickness', action='store_true',
+                   help='put the slice thickness (max zoom, per subject) in the stratum. For a '
+                        'cohort that feeds the RESOLUTION head, where thickness is the target and '
+                        'the thin end is the small stratum that has to survive into both sides.')
     q.add_argument('--force', action='store_true')
 
     q = sub.add_parser('kirby21')
@@ -561,6 +602,6 @@ if __name__ == '__main__':
                  not a.no_require_seg, a.force)
     elif a.cmd == 'bids':
         plan_bids(a.dataset, a.bids, a.fs, a.segs, a.out, a.n_dev, a.seed, a.force,
-                  tuple(x.strip() for x in a.stratify.split(',') if x.strip()))
+                  tuple(x.strip() for x in a.stratify.split(',') if x.strip()), a.thickness)
     else:
         plan_kirby(a.index, a.out, a.force)
