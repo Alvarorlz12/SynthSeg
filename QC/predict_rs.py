@@ -286,6 +286,20 @@ def prepare_output_files(path_images, out_csv, out_resampled):
     return path_images, out_csv, path_resampled
 
 
+def header_spacing(aff, im_res, n_dims=3):
+    """The header's spacing permuted into the RAS order the alignment in preprocess puts the array in.
+    get_ras_axes votes with the inverse affine, i.e. direction over voxel size, so on a thick oblique scan
+    the thick axis loses its vote (tilt above ~arctan(1/k)) and the spacing lands on the wrong axis; the
+    alignment runs on the 1 mm affine and is not affected. unit columns here, so only the directions vote."""
+    aff_dir = np.array(aff, dtype='float')
+    aff_dir[:n_dims, :n_dims] = aff_dir[:n_dims, :n_dims] / np.linalg.norm(aff_dir[:n_dims, :n_dims], axis=0)
+    ras_axes = edit_volumes.get_ras_axes(aff_dir, n_dims=n_dims)
+    ras_axes_ref = edit_volumes.get_ras_axes(np.eye(4), n_dims=n_dims)
+    res_true = np.array(im_res, dtype='float')
+    res_true[ras_axes_ref] = res_true[ras_axes]
+    return res_true, ras_axes
+
+
 def preprocess(path_image, n_levels, target_res, crop=None, min_pad=None, minmax_norm=False,
                pad_mode='constant', path_resample=None):
     """predict_tm's, minus the second volume, with the header's spacing captured before the resampling
@@ -302,12 +316,8 @@ def preprocess(path_image, n_levels, target_res, crop=None, min_pad=None, minmax
         im = im[..., 0]
 
     # the target, read here because after the resampling below the header says 1 mm on every axis
-    # whatever the scan was acquired at. permuted into the RAS order the alignment further down puts
-    # the array in, with the same two lines utils.get_volume_info runs when given an aff_ref.
-    ras_axes = edit_volumes.get_ras_axes(aff, n_dims=n_dims)
-    ras_axes_ref = edit_volumes.get_ras_axes(np.eye(4), n_dims=n_dims)
-    res_true = np.array(im_res, dtype='float')
-    res_true[ras_axes_ref] = res_true[ras_axes]
+    # whatever the scan was acquired at
+    res_true, ras_axes = header_spacing(aff, im_res, n_dims)
 
     # resample image if necessary. this is what puts a real scan in the training domain: coarse content
     # on a 1 mm grid, which is what the deficit is defined against.
