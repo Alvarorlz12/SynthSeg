@@ -72,10 +72,14 @@ parser.add_argument("--norm", type=str, dest="norm", default='instance', choices
                          "architecture: the wrong one is refused by load_weights_checked, not loaded")
 
 # Misc
+parser.add_argument("--n_jobs", type=int, dest="n_jobs", default=None,
+                    help="worker processes for the preprocessing (the resampling to 1 mm is single-threaded). "
+                         "Default: the job's CPUs but one; 1 runs it in the main process")
 parser.add_argument("--no_recompute", action='store_false', dest="recompute",
                     help="leave an existing output csv alone instead of overwriting it")
 
-args = vars(parser.parse_args())
-if args.pop('no_resample'):
-    args['target_res'] = None
-predict_rs(**args)
+if __name__ == '__main__':
+    args = vars(parser.parse_args())
+    if args.pop('no_resample'):
+        args['target_res'] = None
+    predict_rs(**args)

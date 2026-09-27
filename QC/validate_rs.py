@@ -73,7 +73,8 @@ def validate_training(image_dir,
                       norm='instance',
                       recompute=False,
                       cache='auto',
-                      ckpts=None):
+                      ckpts=None,
+                      n_jobs=1):
     """This function validates models saved at different epochs of the same training.
     All models are assumed to be in the same folder.
     The results of each model are saved in a subfolder in validation_main_dir.
@@ -105,7 +106,8 @@ def validate_training(image_dir,
     :param cache: (optional) 'auto' keeps the prepared volumes in memory across checkpoints when they fit in half
     the job's memory budget, 'on' forces it, 'off' preprocesses again at every checkpoint. Default is 'auto'.
     :param ckpts: (optional) list of checkpoint paths to validate instead of every rs_*.h5 of models_dir, which
-    is then ignored (and so is step_eval)."""
+    is then ignored (and so is step_eval).
+    :param n_jobs: (optional) worker processes for the preprocessing, see predict_rs. Default is 1."""
 
     # create result folder
     utils.mkdir(validation_main_dir)
@@ -127,7 +129,7 @@ def validate_training(image_dir,
     prepared = None
     if validation_cache.decide(cache, len(path_images), window(cropping)[0]):
         prepared = prepare_all(path_images, n_levels, target_res, cropping=cropping, minmax_norm=minmax_norm,
-                               pad_mode=pad_mode)
+                               pad_mode=pad_mode, n_jobs=n_jobs)
         print('prepared %d volumes, %.2f GB' % (len(prepared), sum(p[0].nbytes for p in prepared) / 1e9))
 
     # loop over models. the counter runs over the checkpoints to do only: LoopInfo cannot start past 0
@@ -155,7 +157,8 @@ def validate_training(image_dir,
                        norm=norm,
                        recompute=True,
                        verbose=False,
-                       prepared=prepared)
+                       prepared=prepared,
+                       n_jobs=n_jobs)
             # free the previous checkpoint's graph to avoid running out of GPU memory
             K.clear_session()
 

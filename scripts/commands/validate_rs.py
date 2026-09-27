@@ -75,10 +75,14 @@ parser.add_argument("--recompute", action='store_true', dest="recompute",
 parser.add_argument("--cache", type=str, dest="cache", default='auto', choices=['auto', 'on', 'off'],
                     help="keep the preprocessed images in memory across checkpoints: auto (when they fit in half "
                          "the job's memory), on or off. Default auto")
+parser.add_argument("--n_jobs", type=int, dest="n_jobs", default=None,
+                    help="worker processes for the preprocessing (the resampling to 1 mm is single-threaded). "
+                         "Default: the job's CPUs but one; 1 runs it in the main process")
 parser.add_argument("--ckpts", type=str, nargs='+', dest="ckpts", default=None,
                     help="checkpoint paths to validate instead of every rs_*.h5 of models_dir (then ignored)")
 
-args = vars(parser.parse_args())
-if args.pop('no_resample'):
-    args['target_res'] = None
-validate_training(**args)
+if __name__ == '__main__':
+    args = vars(parser.parse_args())
+    if args.pop('no_resample'):
+        args['target_res'] = None
+    validate_training(**args)

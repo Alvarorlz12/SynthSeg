@@ -21,8 +21,12 @@ spacing outright: a 3 mm scan stored on a 3 mm grid is not in that domain, the s
 The three outputs are array axes, and the header's spacings are not in that order. The array is aligned
 to RAS, so the network's axes are R, A, S, while the header holds the acquisition order: a sagittal
 FLAIR at 1x1x3 mm has its 3 mm on whichever array axis the scanner wrote it to, and comparing without
-permuting scores the right number against the wrong axis. The permutation is the same two lines
-utils.get_volume_info runs, written out per image in the ras_axes column, where '012' is the identity.
+permuting scores the right number against the wrong axis. The permutation is written out per image in the
+ras_axes column, where '012' is the identity (see header_spacing).
+
+The preprocessing, and in it the resampling to 1 mm, is single-threaded scipy and costs several seconds per
+anisotropic volume against well under one on the GPU. n_jobs > 1 runs it in worker processes, a few volumes
+ahead of the network, and hands the volumes back in order, so the csv is the same as with n_jobs = 1.
 
 The normalisation is predict.py's p0.5-p99.5, the divisor predict_tm uses and the one SynthSeg deploys
 with. Training ends on an exact min-max instead, and --minmax_norm measures that gap.
@@ -52,6 +56,8 @@ License.
 
 # python imports
 import os
+import collections
+import multiprocessing
 import numpy as np
 
 # project imports
@@ -87,7 +93,8 @@ def predict_rs(path_images,
                norm='instance',
                recompute=True,
                verbose=True,
-               prepared=None):
+               prepared=None,
+               n_jobs=1):
     """
     Predict the per-axis voxel spacing the content of a real image sits at.
 
@@ -130,6 +137,8 @@ def predict_rs(path_images,
     :param prepared: (optional) the output of prepare_all for these same images and preprocessing arguments,
     one entry per image in the order prepare_output_files lists them. validate_rs passes it so that the
     resampling, which dominates the cost, is paid once per validation set and not once per checkpoint.
+    :param n_jobs: (optional) worker processes for the preprocessing. 1 runs it in this process; None takes
+    default_n_jobs(). Ignored when prepared is given. Default is 1.
     """
 
     # prepare input/output filepaths
@@ -149,6 +158,21 @@ def predict_rs(path_images,
     header += ['abs_err', 'ras_axes', 'pad_R', 'pad_A', 'pad_S', 'valid']
     write_csv(path_out, None, True, np.arange(len(header)), np.array(header), skip_first=False)
 
+    cropping, min_pad = window(cropping)
+    assert prepared is None or len(prepared) == len(path_images), \
+        '%d prepared volumes for %d images' % (len(prepared), len(path_images))
+
+    # the workers are started before the model is built, so no process is forked with a live graph in it
+    pool = None
+    if prepared is not None:
+        volumes = iter(prepared)
+    else:
+        n_jobs = default_n_jobs() if n_jobs is None else max(int(n_jobs), 1)
+        jobs = [dict(path_image=path_images[i], n_levels=n_levels, target_res=target_res, crop=cropping,
+                     min_pad=min_pad, minmax_norm=minmax_norm, pad_mode=pad_mode, path_resample=path_resampled[i])
+                for i in range(len(path_images))]
+        volumes, pool = preprocess_in_order(jobs, n_jobs)
+
     # the input shape is left free on the three spatial axes, as predict.py leaves it: the head is a spatial
     # mean, so one build serves every image.
     net = build_rs_model(path_model=path_model,
@@ -161,54 +185,47 @@ def predict_rs(path_images,
                          activation=activation,
                          norm=norm)
 
-    cropping, min_pad = window(cropping)
     print('preprocessing: cropping=%s  target_res=%s  minmax_norm=%s  pad_mode=%s  norm=%s%s'
-          % (cropping, target_res, minmax_norm, pad_mode, norm, '  (prepared once, cached)' if prepared else ''))
-    assert prepared is None or len(prepared) == len(path_images), \
-        '%d prepared volumes for %d images' % (len(prepared), len(path_images))
+          % (cropping, target_res, minmax_norm, pad_mode, norm,
+             '  (prepared once, cached)' if prepared else '  n_jobs=%d' % n_jobs))
 
     # perform prediction
     if len(path_images) <= 10:
         loop_info = utils.LoopInfo(len(path_images), 1, 'predicting', True)
     else:
         loop_info = utils.LoopInfo(len(path_images), 10, 'predicting', True)
-    for i in range(len(path_images)):
-        if verbose:
-            loop_info.update(i)
+    try:
+        for i in range(len(path_images)):
+            if verbose:
+                loop_info.update(i)
 
-        # preprocessing. res_true is the header's spacing, permuted into the network's axis order and read
-        # before the resampling.
-        if prepared is not None:
-            image, res_true, ras_axes, pad = prepared[i]
-        else:
-            image, res_true, ras_axes, pad = preprocess(path_image=path_images[i],
-                                         n_levels=n_levels,
-                                         target_res=target_res,
-                                         crop=cropping,
-                                         min_pad=min_pad,
-                                         minmax_norm=minmax_norm,
-                                         pad_mode=pad_mode,
-                                         path_resample=path_resampled[i])
+            # preprocessing. res_true is the header's spacing, permuted into the network's axis order and read
+            # before the resampling.
+            image, res_true, ras_axes, pad = next(volumes)
 
-        # prediction. the net returns the deficit s - atlas_res, kept at or above 0 by the relu on the
-        # last head conv; read it back as a spacing on the grid the image now sits on.
-        deficit = np.asarray(net.predict(image))[0]
-        s_pred = (atlas_res if atlas_res is not None else res_true) + deficit
-        err = np.abs(s_pred - res_true)
+            # prediction. the net returns the deficit s - atlas_res, kept at or above 0 by the relu on the
+            # last head conv; read it back as a spacing on the grid the image now sits on.
+            deficit = np.asarray(net.predict(image))[0]
+            s_pred = (atlas_res if atlas_res is not None else res_true) + deficit
+            err = np.abs(s_pred - res_true)
 
-        row = [os.path.basename(path_images[i]).replace('.nii.gz', '').replace('.nii', '').replace('.mgz', '')]
-        row += ['%.6f' % v for v in s_pred]
-        row += ['%.6f' % v for v in res_true]
-        row += ['%.6f' % v for v in err]
-        row += ['%.6f' % float(err.mean())]
-        # the permutation that was applied, as a string so a spreadsheet cannot read it as a number:
-        # '012' is the identity, '201' is the R spacing sitting on array axis 2.
-        row += [''.join(str(a) for a in ras_axes)]
-        # padding per axis and validity flag
-        row += ['%d' % v for v in pad] + ['%d' % int(max(pad) <= PAD_TOL)]
+            row = [os.path.basename(path_images[i]).replace('.nii.gz', '').replace('.nii', '').replace('.mgz', '')]
+            row += ['%.6f' % v for v in s_pred]
+            row += ['%.6f' % v for v in res_true]
+            row += ['%.6f' % v for v in err]
+            row += ['%.6f' % float(err.mean())]
+            # the permutation that was applied, as a string so a spreadsheet cannot read it as a number:
+            # '012' is the identity, '201' is the R spacing sitting on array axis 2.
+            row += [''.join(str(a) for a in ras_axes)]
+            # padding per axis and validity flag
+            row += ['%d' % v for v in pad] + ['%d' % int(max(pad) <= PAD_TOL)]
 
-        # write results to disk
-        write_csv(path_out, row, True, np.arange(len(header)), np.array(header), skip_first=False)
+            # write results to disk
+            write_csv(path_out, row, True, np.arange(len(header)), np.array(header), skip_first=False)
+    finally:
+        if pool is not None:
+            pool.terminate()
+            pool.join()
 
     print('\nwrote %s' % path_out)
 
@@ -222,12 +239,50 @@ def window(cropping):
     return None, 128
 
 
-def prepare_all(path_images, n_levels, target_res, cropping=160, minmax_norm=False, pad_mode='constant'):
+def prepare_all(path_images, n_levels, target_res, cropping=160, minmax_norm=False, pad_mode='constant',
+                n_jobs=1):
     """preprocess over a list of images, for predict_rs's prepared argument: the same call predict_rs makes
     per image, so a cached volume is bit-identical to the one it would compute."""
     cropping, min_pad = window(cropping)
-    return [preprocess(path_image=p, n_levels=n_levels, target_res=target_res, crop=cropping, min_pad=min_pad,
-                       minmax_norm=minmax_norm, pad_mode=pad_mode) for p in path_images]
+    jobs = [dict(path_image=p, n_levels=n_levels, target_res=target_res, crop=cropping, min_pad=min_pad,
+                 minmax_norm=minmax_norm, pad_mode=pad_mode) for p in path_images]
+    volumes, pool = preprocess_in_order(jobs, default_n_jobs() if n_jobs is None else max(int(n_jobs), 1))
+    try:
+        return list(volumes)
+    finally:
+        if pool is not None:
+            pool.terminate()
+            pool.join()
+
+
+def default_n_jobs():
+    """The CPUs of this job but one, which stays with the process that drives the network."""
+    n = os.environ.get('SLURM_CPUS_PER_TASK')
+    n = int(n) if n else (os.cpu_count() or 1)
+    return max(n - 1, 1)
+
+
+def _preprocess_job(job):
+    return preprocess(**job)
+
+
+def preprocess_in_order(jobs, n_jobs):
+    """(iterator over preprocess(**job) in the order of jobs, pool or None). With n_jobs > 1 at most
+    2 * n_jobs volumes are in flight, so a network slower than the workers does not pile them up in memory."""
+    if n_jobs <= 1 or len(jobs) <= 1:
+        return map(_preprocess_job, jobs), None
+    pool = multiprocessing.Pool(min(n_jobs, len(jobs)))
+
+    def ordered():
+        todo = iter(jobs)
+        pending = collections.deque(pool.apply_async(_preprocess_job, (j,)) for _, j in zip(range(2 * n_jobs), todo))
+        while pending:
+            volume = pending.popleft().get()
+            nxt = next(todo, None)
+            if nxt is not None:
+                pending.append(pool.apply_async(_preprocess_job, (nxt,)))
+            yield volume
+    return ordered(), pool
 
 
 def prepare_output_files(path_images, out_csv, out_resampled):
