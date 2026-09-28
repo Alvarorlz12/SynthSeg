@@ -9,31 +9,19 @@ through. Two things predict.py does not do are taken from elsewhere in the repos
 written again: carrying a second volume through the identical crop and pad (predict_group), and the
 regressor's own graph and checkpoint guard (QC/training_tm.py).
 
-THE SEGMENTATION NEVER ENTERS THE PREPROCESSING. It is read only for the ground-truth columns; the
-window comes from the volume alone, so nothing here needs a segmentation to run. Centring the crop on
-the region a segmentation finds, the way predict_qc does, was dropped on purpose: a figure measured
-with a brain centre that deployment does not have is not a measurement of what will be deployed.
+The segmentation is only read for the ground-truth columns: the window comes from the volume alone, so
+nothing here needs a segmentation to run. The crop is not centred on the region a segmentation finds, as
+predict_qc does, since deployment has no brain centre to centre it on.
 
-Three things worth knowing before reading a number out of this.
+The head ends in a mean over x, y and z, so the network accepts any shape, e.g. a 256^3 conformed head,
+and answers differently for each, because the window it averages over holds more or less air. Training
+cropped to 160^3, so 160 is the default. --cropping is the only window knob: min_pad follows it, since
+predict.py caps min_pad at cropping.
 
-THE OUTPUT IS A SPATIAL MEAN. The head ends in a mean over x, y and z, so the network is fully
-convolutional and will accept a 256^3 conformed head without complaining -- and answer differently,
-because the window it averages over then holds far more air. Training cropped to 160^3, so 160 is the
-default. Change it and the number changes; that is a property of the head, not a bug.
-
-There is ONE window knob, --cropping. min_pad follows it and could not do otherwise, since predict.py
-caps min_pad at cropping: it is a floor for a head smaller than the crop, never a ceiling.
-
-THE ORDER IS resample -> align -> crop -> NORMALISE -> pad. The normalisation lands after the crop on
-purpose, so p0.5-p99.5 is read off the window the network sees rather than off the whole head -- and
-the generator does the same, cropping before it normalises. That agreement between training and
-deployment is why the order is not free. The divisor is predict.py's and not the absolute min-max
-training used: it is what SynthSeg does at deployment, and the deliverable is a ratio, so with a floor
-at 0 it is invariant to the ceiling by algebra even though the three absolute means are not.
-
-NOTHING HERE MATCHES scratchpad/score_real_tissue_means.py BY CONSTRUCTION. That script centres a hard
-160^3 window on the centroid of seg > 0, normalises with its own min-max, and never resamples (it
-requires SynthSeg's --resample output instead). Numbers from the two are not interchangeable.
+The order is resample -> align -> crop -> normalise -> pad. The normalisation comes after the crop, so
+p0.5-p99.5 is taken over the window the network sees, as the generator crops before it normalises. The
+divisor is predict.py's and not the absolute min-max used in training: the contrast is a ratio, so with a
+floor at 0 it does not depend on the ceiling, even though the absolute means do.
 
 Usage:
   # deployment: an image goes in, a csv comes out, no segmentation anywhere
@@ -79,6 +67,7 @@ def predict_tm(path_images,
                path_resampled=None,
                cropping=160,
                target_res=1.,
+               pad_mode='constant',
                n_levels=5,
                nb_conv_per_level=3,
                conv_size=5,
@@ -118,6 +107,9 @@ def predict_tm(path_images,
     whole conformed head instead.
     :param target_res: (optional) resolution the image is resampled to before anything else. Default is
     1., the resolution the training label maps are on. None turns the resampling off.
+    :param pad_mode: (optional) what fills an axis shorter than the window: 'constant' pads with zeros as
+    predict.py does, 'edge' with the outermost plane. Training never pads. The ground truth is padded with 0
+    either way. Default is 'constant'. The csv gives the voxels padded on each axis (pad_R/A/S).
 
     :param n_levels: (optional) number of levels of the encoder. Default is 5.
     :param nb_conv_per_level: (optional) number of convolutions per level. Default is 3.
@@ -125,7 +117,7 @@ def predict_tm(path_images,
     :param unet_feat_count: (optional) number of features at the first level. Default is 24.
     :param feat_multiplier: (optional) feature multiplier between levels. Default is 2.
     :param activation: (optional) activation function. Default is 'relu'.
-    :param norm: (optional) the normalisation the checkpoint was TRAINED with, among 'instance', 'batch'
+    :param norm: (optional) the normalisation the checkpoint was trained with, among 'instance', 'batch'
     and 'none'. It is an architecture argument and not a detail: a 'none' checkpoint holds no
     tm_enc_in_down_* layers at all. Default is 'instance'.
     :param min_vox: (optional) a tissue with fewer voxels than this in the crop is left blank in the
@@ -153,6 +145,7 @@ def predict_tm(path_images,
     header = list(tissues) + ['contrast']
     if gt_folder is not None:
         header += ['true_%s' % t for t in tissues] + ['true_contrast', 'abs_err']
+    header += ['pad_R', 'pad_A', 'pad_S']
     write_csv(path_out, None, True, np.arange(len(header)), np.array(header), skip_first=False)
 
     cropping, min_pad = window(cropping)
@@ -167,7 +160,7 @@ def predict_tm(path_images,
         n_jobs = default_n_jobs() if n_jobs is None else max(int(n_jobs), 1)
         jobs = [dict(path_image=path_images[i], path_gt=path_gts[i], n_levels=n_levels, target_res=target_res,
                      cropping=cropping, min_pad=min_pad, tissues=tissues, min_vox=min_vox,
-                     path_resample=path_resampled[i]) for i in range(len(path_images))]
+                     path_resample=path_resampled[i], pad_mode=pad_mode) for i in range(len(path_images))]
         volumes, pool = preprocess_in_order(jobs, n_jobs, fn=_prepare_job)
 
     # the input shape is left free on the three spatial axes, as predict.py leaves it: the head is a
@@ -183,8 +176,9 @@ def predict_tm(path_images,
                          activation=activation,
                          norm=norm)
 
-    print('preprocessing: cropping=%s  target_res=%s  norm=%s%s'
-          % (cropping, target_res, norm, '  (prepared once, cached)' if prepared else '  n_jobs=%d' % n_jobs))
+    print('preprocessing: cropping=%s  target_res=%s  pad_mode=%s  norm=%s%s'
+          % (cropping, target_res, pad_mode, norm,
+             '  (prepared once, cached)' if prepared else '  n_jobs=%d' % n_jobs))
 
     # perform prediction
     if len(path_images) <= 10:
@@ -196,15 +190,14 @@ def predict_tm(path_images,
             if verbose:
                 loop_info.update(i)
 
-            # preprocessing, and the truth read off the segmentation when there is one
-            image, truth = next(volumes)
+            # preprocessing
+            image, truth, pad = next(volumes)
 
             # prediction
             mu_pred = np.asarray(net.predict(image))[0]
 
-            # the deliverable, and the same quantities read off the segmentation when there is one. both are
-            # computed on the SAME crop of the SAME normalised volume: a ground truth taken over the whole
-            # head while the network sees a 160^3 window is a different quantity, not a stricter one.
+            # prediction and truth are computed on the same crop of the same normalised volume: a truth taken
+            # over the whole head while the network sees a 160^3 window would be a different quantity.
             row = [os.path.basename(path_images[i]).replace('.nii.gz', '').replace('.nii', '').replace('.mgz', '')]
             row += ['%.6f' % v for v in mu_pred] + ['%.6f' % contrast(mu_pred, tissues)]
             if truth is not None:
@@ -216,6 +209,7 @@ def predict_tm(path_images,
                 if np.any(counts < min_vox):
                     print('  [warn] %s: %s under %d voxels in the crop, left blank'
                           % (row[0], [t for t, c in zip(tissues, counts) if c < min_vox], min_vox))
+            row += ['%d' % v for v in pad]
 
             # write results to disk
             write_csv(path_out, row, True, np.arange(len(header)), np.array(header), skip_first=False)
@@ -246,27 +240,32 @@ def window(cropping):
     return None, 128
 
 
-def prepare(path_image, path_gt, n_levels, target_res, cropping, min_pad, tissues, min_vox, path_resample=None):
-    """One image as predict_tm feeds it to the network, and the truth (mu_true, counts) read off its
-    segmentation on the same crop of the same normalised volume, or None without a segmentation."""
-    image, gt = preprocess(path_image=path_image, n_levels=n_levels, target_res=target_res, path_gt=path_gt,
-                           crop=cropping, min_pad=min_pad, path_resample=path_resample)[:2]
+def prepare(path_image, path_gt, n_levels, target_res, cropping, min_pad, tissues, min_vox, path_resample=None,
+            pad_mode='constant'):
+    """One image as predict_tm feeds it to the network, the truth (mu_true, counts) from its segmentation
+    (None without one), and the voxels padded on each RAS axis."""
+    out = preprocess(path_image=path_image, n_levels=n_levels, target_res=target_res, path_gt=path_gt,
+                     crop=cropping, min_pad=min_pad, path_resample=path_resample, pad_mode=pad_mode)
+    image, gt, pad_idx = out[0], out[1], out[6]
+    pad = [int(s - (pad_idx[3 + j] - pad_idx[j])) for j, s in enumerate(image.shape[1:4])]
     truth = tissue_means(image[0, ..., 0], gt, tissues, min_vox) if gt is not None else None
-    return image, truth
+    return image, truth, pad
 
 
 def _prepare_job(job):
     return prepare(**job)
 
 
-def prepare_all(path_images, path_gts, n_levels, target_res, cropping=160, tissues=None, min_vox=8, n_jobs=1):
+def prepare_all(path_images, path_gts, n_levels, target_res, cropping=160, tissues=None, min_vox=8, n_jobs=1,
+                pad_mode='constant'):
     """prepare over a list of images, for predict_tm's prepared argument: the same call predict_tm makes
     per image, so a cached volume and its truth are bit-identical to the ones it would compute. Only the
     image and the tissue means are kept, not the segmentation."""
     cropping, min_pad = window(cropping)
     tissues = resolve_tissues(tissues)
     jobs = [dict(path_image=p, path_gt=g, n_levels=n_levels, target_res=target_res, cropping=cropping,
-                 min_pad=min_pad, tissues=tissues, min_vox=min_vox) for p, g in zip(path_images, path_gts)]
+                 min_pad=min_pad, tissues=tissues, min_vox=min_vox, pad_mode=pad_mode)
+            for p, g in zip(path_images, path_gts)]
     volumes, pool = preprocess_in_order(jobs, default_n_jobs() if n_jobs is None else max(int(n_jobs), 1),
                                         fn=_prepare_job)
     try:
@@ -336,10 +335,8 @@ def prepare_output_files(path_images, out_csv, gt_folder, out_resampled):
     # the count is asserted: a folder with one extra file shifts every pairing by one and every number
     # below it stays plausible.
     if gt_folder is not None:
-        # a .txt is a LIST, not a segmentation. Without this branch it would be read as one file, paired
-        # with every image, and killed by the count assert below -- loudly, but for the wrong reason. The
-        # list form is the one that matters on a real tree: BIDS and FreeSurfer do not lay images and
-        # anchors out in two flat folders that happen to sort the same way.
+        # a .txt is a list of segmentations, the form needed on BIDS and FreeSurfer trees, where images and
+        # segmentations are not in two flat folders that sort the same way.
         if gt_folder[-4:] == '.txt':
             with open(gt_folder, 'r') as f:
                 path_gts = [line.replace('\n', '') for line in f.readlines() if line != '\n']
@@ -360,7 +357,7 @@ def prepare_output_files(path_images, out_csv, gt_folder, out_resampled):
 
 
 def preprocess(path_image, n_levels, target_res, path_gt=None, crop=None, min_pad=None,
-               path_resample=None):
+               path_resample=None, pad_mode='constant'):
     """predict.py's, with predict_group's second volume carried through the identical window. The crop
     is chosen from the volume, so the segmentation is never an input to the preprocessing -- only
     something that has to land on the same voxels afterwards."""
@@ -375,10 +372,8 @@ def preprocess(path_image, n_levels, target_res, path_gt=None, crop=None, min_pa
         print('WARNING: detected more than 1 channel, only keeping the first channel.')
         im = im[..., 0]
 
-    # read the ground truth on ITS OWN grid. loading it as if it shared the image's grid is the mistake
-    # this whole script exists to make impossible: a segmentation computed at another resolution then
-    # pairs voxel for voxel with the image and every per-tissue mean is taken over the wrong voxels,
-    # with nothing in the output looking wrong.
+    # read the ground truth on its own grid: a segmentation computed at another resolution cannot be paired
+    # voxel for voxel with the image.
     if path_gt is not None:
         gt, _, aff_gt, _, _, _, _ = utils.get_volume_info(path_gt, True)
     else:
@@ -402,8 +397,8 @@ def preprocess(path_image, n_levels, target_res, path_gt=None, crop=None, min_pa
             gt = edit_volumes.resample_volume_like(im, aff, gt, aff_gt, interpolation='nearest')
         gt = np.round(gt).astype('int32')
 
-    # align image. the ground truth is aligned with the IMAGE's affine, as predict_group does with its
-    # mask: by this point the two are on one grid, so one affine describes both.
+    # align image. the ground truth is aligned with the image's affine, as predict_group does with its
+    # mask: by this point the two are on one grid.
     im = edit_volumes.align_volume_to_ref(im, aff, aff_ref=np.eye(4), n_dims=n_dims, return_copy=False)
     if gt is not None:
         gt = edit_volumes.align_volume_to_ref(gt, aff, aff_ref=np.eye(4), n_dims=n_dims, return_copy=False)
@@ -421,18 +416,23 @@ def preprocess(path_image, n_levels, target_res, path_gt=None, crop=None, min_pa
     else:
         crop_idx = None
 
-    # normalise. p0.5-p99.5 and after the crop, so the divisor is read off the window the network sees
-    # rather than off the whole head. See the header for why this is not the min-max training used.
+    # normalise, p0.5-p99.5 over the cropped window (see the header)
     im = edit_volumes.rescale_volume(im, new_min=0., new_max=1., min_percentile=0.5, max_percentile=99.5)
 
-    # pad image
+    # pad image. 'edge' fills with the outermost plane instead of zeros, with pad_volume's margins; the
+    # ground truth is always padded with 0, so a copied plane never counts as tissue in the truth.
     input_shape = im.shape[:n_dims]
     pad_shape = [utils.find_closest_number_divisible_by_m(s, 2 ** n_levels, 'higher') for s in input_shape]
     if min_pad is not None:
         min_pad = utils.reformat_to_list(min_pad, length=n_dims, dtype='int')
         min_pad = [utils.find_closest_number_divisible_by_m(s, 2 ** n_levels, 'higher') for s in min_pad]
         pad_shape = np.maximum(pad_shape, min_pad)
-    im, pad_idx = edit_volumes.pad_volume(im, padding_shape=pad_shape, return_pad_idx=True)
+    pad = [max(int(p) - s, 0) for p, s in zip(pad_shape, input_shape)]
+    if pad_mode == 'constant':
+        im, pad_idx = edit_volumes.pad_volume(im, padding_shape=pad_shape, return_pad_idx=True)
+    else:
+        pad_idx = np.array([p // 2 for p in pad] + [p // 2 + s for p, s in zip(pad, input_shape)])
+        im = np.pad(im, [(p // 2, p - p // 2) for p in pad], mode=pad_mode)
     if gt is not None:
         gt = edit_volumes.pad_volume(gt, padding_shape=pad_shape)
 
@@ -451,10 +451,8 @@ def build_tm_model(path_model, input_shape, n_tissues, n_levels, nb_conv_per_lev
     import keras.layers as KL
     import keras.models as KM
 
-    # the normalisation is an ARCHITECTURE argument and not a detail of training: with norm='none' the
-    # graph holds no tm_enc_in_down_* layers at all, so loading a 'none' checkpoint into an instance-norm
-    # graph fails outright in load_weights_checked. That is the good case -- it fails loudly rather than
-    # loading whatever happens to line up by name and running a different network in silence.
+    # the normalisation changes the graph: with norm='none' there are no tm_enc_in_down_* layers, so a
+    # checkpoint trained with another norm is refused by load_weights_checked.
     instance_norm = (norm == 'instance')
     batch_norm = -1 if norm == 'batch' else None
     print('architecture: norm=%s' % norm)

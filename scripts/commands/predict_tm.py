@@ -60,6 +60,9 @@ parser.add_argument("--target_res", type=float, dest="target_res", default=1.,
                     help="resolution the image is resampled to before anything else")
 parser.add_argument("--no_resample", action='store_true', dest="no_resample",
                     help="skip the resampling entirely and score the image on its own grid")
+parser.add_argument("--pad_mode", type=str, dest="pad_mode", default='constant', choices=['constant', 'edge'],
+                    help="what fills an axis shorter than the window: zeros as predict.py (constant) or the "
+                         "outermost plane (edge). The ground truth is padded with 0 either way.")
 
 # Architecture parameters
 parser.add_argument("--conv_size", type=int, dest="conv_size", default=5, help="size of the convolution kernels")
@@ -83,7 +86,8 @@ parser.add_argument("--n_jobs", type=int, dest="n_jobs", default=None,
                     help="worker processes for the preprocessing. Default: the CPUs of the job but one. The csv "
                          "is the same as with 1.")
 
-args = vars(parser.parse_args())
-if args.pop('no_resample'):
-    args['target_res'] = None
-predict_tm(**args)
+if __name__ == '__main__':
+    args = vars(parser.parse_args())
+    if args.pop('no_resample'):
+        args['target_res'] = None
+    predict_tm(**args)
