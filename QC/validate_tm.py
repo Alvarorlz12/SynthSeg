@@ -87,7 +87,8 @@ def validate_training(image_dir,
                       norm='instance',
                       min_vox=8,
                       recompute=False,
-                      cache='auto'):
+                      cache='auto',
+                      ckpts=None):
     """This function validates models saved at different epochs of the same training.
     All models are assumed to be in the same folder.
     The results of each model are saved in a subfolder in validation_main_dir.
@@ -118,7 +119,9 @@ def validate_training(image_dir,
     rows than images (a checkpoint killed halfway) is always recomputed.
     :param cache: (optional) 'auto' keeps the prepared volumes and their tissue means in memory across checkpoints
     when they fit in half the job's memory budget, 'on' forces it, 'off' preprocesses again at every checkpoint.
-    Default is 'auto'."""
+    Default is 'auto'.
+    :param ckpts: (optional) list of checkpoint paths to validate instead of every tm_*.h5 of models_dir, which
+    is then ignored (and so is step_eval)."""
 
     # create result folder
     utils.mkdir(validation_main_dir)
@@ -126,7 +129,10 @@ def validate_training(image_dir,
     # the image/segmentation pairs, in the order predict_tm will pair them, and the checkpoints still to do
     path_images, _, path_gts, _ = prepare_output_files(image_dir, os.path.join(validation_main_dir, 'tm_results.csv'),
                                                        gt_dir, None)
-    list_models = utils.list_files(models_dir, expr=['tm', '.h5'], cond_type='and')[::step_eval]
+    if ckpts is not None:
+        list_models = list(ckpts)
+    else:
+        list_models = utils.list_files(models_dir, expr=['tm', '.h5'], cond_type='and')[::step_eval]
     score_paths = [os.path.join(validation_main_dir, os.path.basename(p).replace('.h5', ''), 'tm_results.csv')
                    for p in list_models]
     todo = [recompute or not validation_cache.complete(s, len(path_images)) for s in score_paths]

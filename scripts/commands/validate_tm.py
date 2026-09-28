@@ -77,6 +77,8 @@ parser.add_argument("--recompute", action='store_true', dest="recompute",
 parser.add_argument("--cache", type=str, dest="cache", default='auto', choices=['auto', 'on', 'off'],
                     help="keep the preprocessed images in memory across checkpoints: auto (when they fit in half "
                          "the job's memory), on or off. Default auto")
+parser.add_argument("--ckpts", type=str, nargs='+', dest="ckpts", default=None,
+                    help="checkpoint paths to validate instead of every tm_*.h5 of models_dir (then ignored)")
 
 args = vars(parser.parse_args())
 if args.pop('no_resample'):
