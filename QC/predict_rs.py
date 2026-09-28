@@ -266,21 +266,22 @@ def _preprocess_job(job):
     return preprocess(**job)
 
 
-def preprocess_in_order(jobs, n_jobs):
-    """(iterator over preprocess(**job) in the order of jobs, pool or None). With n_jobs > 1 at most
-    2 * n_jobs volumes are in flight, so a network slower than the workers does not pile them up in memory."""
+def preprocess_in_order(jobs, n_jobs, fn=_preprocess_job):
+    """(iterator over fn(job) in the order of jobs, pool or None). With n_jobs > 1 at most 2 * n_jobs
+    volumes are in flight, so a network slower than the workers does not pile them up in memory. fn is
+    preprocess(**job) by default; predict_tm passes its own, which has to be a module-level function."""
     if n_jobs <= 1 or len(jobs) <= 1:
-        return map(_preprocess_job, jobs), None
+        return map(fn, jobs), None
     pool = multiprocessing.Pool(min(n_jobs, len(jobs)))
 
     def ordered():
         todo = iter(jobs)
-        pending = collections.deque(pool.apply_async(_preprocess_job, (j,)) for _, j in zip(range(2 * n_jobs), todo))
+        pending = collections.deque(pool.apply_async(fn, (j,)) for _, j in zip(range(2 * n_jobs), todo))
         while pending:
             volume = pending.popleft().get()
             nxt = next(todo, None)
             if nxt is not None:
-                pending.append(pool.apply_async(_preprocess_job, (nxt,)))
+                pending.append(pool.apply_async(fn, (nxt,)))
             yield volume
     return ordered(), pool
 

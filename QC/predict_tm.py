@@ -64,6 +64,7 @@ import numpy as np
 # project imports
 from SynthSeg.predict import write_csv
 from QC import training_tm as tm
+from QC.predict_rs import default_n_jobs, preprocess_in_order
 
 # third-party imports
 from ext.lab2im import utils
@@ -88,7 +89,8 @@ def predict_tm(path_images,
                min_vox=8,
                recompute=True,
                verbose=True,
-               prepared=None):
+               prepared=None,
+               n_jobs=1):
     """
     Predict the per-tissue mean intensity, and the GM-WM contrast built from it, on real images.
 
@@ -133,6 +135,8 @@ def predict_tm(path_images,
     :param prepared: (optional) the output of prepare_all for these same images, ground truths and preprocessing
     arguments, one entry per image in the order prepare_output_files pairs them. validate_tm passes it so that
     the resampling, which dominates the cost, is paid once per validation set and not once per checkpoint.
+    :param n_jobs: (optional) worker processes for the preprocessing, as in predict_rs. 1 runs it in this process;
+    None takes the CPUs of the job but one. Ignored when prepared is given. Default is 1.
     """
 
     # prepare input/output filepaths
@@ -151,6 +155,21 @@ def predict_tm(path_images,
         header += ['true_%s' % t for t in tissues] + ['true_contrast', 'abs_err']
     write_csv(path_out, None, True, np.arange(len(header)), np.array(header), skip_first=False)
 
+    cropping, min_pad = window(cropping)
+    assert prepared is None or len(prepared) == len(path_images), \
+        '%d prepared volumes for %d images' % (len(prepared), len(path_images))
+
+    # the workers are started before the model is built, so no process is forked with a live graph in it
+    pool = None
+    if prepared is not None:
+        volumes = iter(prepared)
+    else:
+        n_jobs = default_n_jobs() if n_jobs is None else max(int(n_jobs), 1)
+        jobs = [dict(path_image=path_images[i], path_gt=path_gts[i], n_levels=n_levels, target_res=target_res,
+                     cropping=cropping, min_pad=min_pad, tissues=tissues, min_vox=min_vox,
+                     path_resample=path_resampled[i]) for i in range(len(path_images))]
+        volumes, pool = preprocess_in_order(jobs, n_jobs, fn=_prepare_job)
+
     # the input shape is left free on the three spatial axes, as predict.py leaves it: the head is a
     # spatial mean, so the graph is shape-agnostic and one build serves every image.
     net = build_tm_model(path_model=path_model,
@@ -164,46 +183,46 @@ def predict_tm(path_images,
                          activation=activation,
                          norm=norm)
 
-    cropping, min_pad = window(cropping)
-    assert prepared is None or len(prepared) == len(path_images), \
-        '%d prepared volumes for %d images' % (len(prepared), len(path_images))
+    print('preprocessing: cropping=%s  target_res=%s  norm=%s%s'
+          % (cropping, target_res, norm, '  (prepared once, cached)' if prepared else '  n_jobs=%d' % n_jobs))
 
     # perform prediction
     if len(path_images) <= 10:
         loop_info = utils.LoopInfo(len(path_images), 1, 'predicting', True)
     else:
         loop_info = utils.LoopInfo(len(path_images), 10, 'predicting', True)
-    for i in range(len(path_images)):
-        if verbose:
-            loop_info.update(i)
+    try:
+        for i in range(len(path_images)):
+            if verbose:
+                loop_info.update(i)
 
-        # preprocessing, and the truth read off the segmentation when there is one
-        if prepared is not None:
-            image, truth = prepared[i]
-        else:
-            image, truth = prepare(path_images[i], path_gts[i], n_levels, target_res, cropping, min_pad, tissues,
-                                   min_vox, path_resample=path_resampled[i])
+            # preprocessing, and the truth read off the segmentation when there is one
+            image, truth = next(volumes)
 
-        # prediction
-        mu_pred = np.asarray(net.predict(image))[0]
+            # prediction
+            mu_pred = np.asarray(net.predict(image))[0]
 
-        # the deliverable, and the same quantities read off the segmentation when there is one. both are
-        # computed on the SAME crop of the SAME normalised volume: a ground truth taken over the whole
-        # head while the network sees a 160^3 window is a different quantity, not a stricter one.
-        row = [os.path.basename(path_images[i]).replace('.nii.gz', '').replace('.nii', '').replace('.mgz', '')]
-        row += ['%.6f' % v for v in mu_pred] + ['%.6f' % contrast(mu_pred, tissues)]
-        if truth is not None:
-            mu_true, counts = truth
-            c_true = contrast(mu_true, tissues)
-            row += ['' if np.isnan(v) else '%.6f' % v for v in mu_true]
-            row += ['' if np.isnan(c_true) else '%.6f' % c_true]
-            row += ['' if np.isnan(c_true) else '%.6f' % abs(contrast(mu_pred, tissues) - c_true)]
-            if np.any(counts < min_vox):
-                print('  [warn] %s: %s under %d voxels in the crop, left blank'
-                      % (row[0], [t for t, c in zip(tissues, counts) if c < min_vox], min_vox))
+            # the deliverable, and the same quantities read off the segmentation when there is one. both are
+            # computed on the SAME crop of the SAME normalised volume: a ground truth taken over the whole
+            # head while the network sees a 160^3 window is a different quantity, not a stricter one.
+            row = [os.path.basename(path_images[i]).replace('.nii.gz', '').replace('.nii', '').replace('.mgz', '')]
+            row += ['%.6f' % v for v in mu_pred] + ['%.6f' % contrast(mu_pred, tissues)]
+            if truth is not None:
+                mu_true, counts = truth
+                c_true = contrast(mu_true, tissues)
+                row += ['' if np.isnan(v) else '%.6f' % v for v in mu_true]
+                row += ['' if np.isnan(c_true) else '%.6f' % c_true]
+                row += ['' if np.isnan(c_true) else '%.6f' % abs(contrast(mu_pred, tissues) - c_true)]
+                if np.any(counts < min_vox):
+                    print('  [warn] %s: %s under %d voxels in the crop, left blank'
+                          % (row[0], [t for t, c in zip(tissues, counts) if c < min_vox], min_vox))
 
-        # write results to disk
-        write_csv(path_out, row, True, np.arange(len(header)), np.array(header), skip_first=False)
+            # write results to disk
+            write_csv(path_out, row, True, np.arange(len(header)), np.array(header), skip_first=False)
+    finally:
+        if pool is not None:
+            pool.terminate()
+            pool.join()
 
     print('\nwrote %s' % path_out)
 
@@ -236,14 +255,26 @@ def prepare(path_image, path_gt, n_levels, target_res, cropping, min_pad, tissue
     return image, truth
 
 
-def prepare_all(path_images, path_gts, n_levels, target_res, cropping=160, tissues=None, min_vox=8):
+def _prepare_job(job):
+    return prepare(**job)
+
+
+def prepare_all(path_images, path_gts, n_levels, target_res, cropping=160, tissues=None, min_vox=8, n_jobs=1):
     """prepare over a list of images, for predict_tm's prepared argument: the same call predict_tm makes
     per image, so a cached volume and its truth are bit-identical to the ones it would compute. Only the
     image and the tissue means are kept, not the segmentation."""
     cropping, min_pad = window(cropping)
     tissues = resolve_tissues(tissues)
-    return [prepare(p, g, n_levels, target_res, cropping, min_pad, tissues, min_vox)
-            for p, g in zip(path_images, path_gts)]
+    jobs = [dict(path_image=p, path_gt=g, n_levels=n_levels, target_res=target_res, cropping=cropping,
+                 min_pad=min_pad, tissues=tissues, min_vox=min_vox) for p, g in zip(path_images, path_gts)]
+    volumes, pool = preprocess_in_order(jobs, default_n_jobs() if n_jobs is None else max(int(n_jobs), 1),
+                                        fn=_prepare_job)
+    try:
+        return list(volumes)
+    finally:
+        if pool is not None:
+            pool.terminate()
+            pool.join()
 
 
 def prepare_output_files(path_images, out_csv, gt_folder, out_resampled):

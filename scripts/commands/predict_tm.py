@@ -79,6 +79,9 @@ parser.add_argument("--min_vox", type=int, dest="min_vox", default=8,
                     help="a tissue with fewer voxels than this in the crop is left blank in the gt columns")
 parser.add_argument("--no_recompute", action='store_false', dest="recompute",
                     help="leave an existing output csv alone instead of overwriting it")
+parser.add_argument("--n_jobs", type=int, dest="n_jobs", default=None,
+                    help="worker processes for the preprocessing. Default: the CPUs of the job but one. The csv "
+                         "is the same as with 1.")
 
 args = vars(parser.parse_args())
 if args.pop('no_resample'):
