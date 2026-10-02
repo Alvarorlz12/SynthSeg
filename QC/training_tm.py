@@ -107,6 +107,9 @@ def training(labels_dir,
              batch_norm=-1,
              instance_norm=False,
              use_residuals=True,
+             use_cbam=False,
+             cbam_ratio=4,
+             cbam_kernels=(7, 7, 7, 3, 3),
              lr=1e-4,
              clipnorm=0.,
              epochs=100,
@@ -166,6 +169,12 @@ def training(labels_dir,
     :param instance_norm: (optional) normalise each image by its own statistics, in training and at
     inference alike. Default is False.
     :param use_residuals: (optional) residual connection per level. Default is True.
+    :param use_cbam: (optional) a CBAM block (channel then spatial attention) on the conv arm of every
+    encoder level, before the residual add. The head is left as it is. Default is False.
+    :param cbam_ratio: (optional) reduction of the channel attention MLP. Default is 4.
+    :param cbam_kernels: (optional) spatial attention kernel, one int for all levels or one per level, so a
+    list has to have n_levels entries. Default is (7, 7, 7, 3, 3): 7 while the map is large, 3 on the
+    20^3 and 10^3 maps, where a 7^3 kernel would mostly see the zero padding.
 
     # training
     :param lr: (optional) learning rate. Default is 1e-4.
@@ -208,7 +217,7 @@ def training(labels_dir,
     check_alignment(gen_labels, gen_classes, names)
     mu_pred = build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_level, conv_size,
                                      unet_feat_count, feat_multiplier, activation, batch_norm, use_residuals,
-                                     instance_norm)
+                                     instance_norm, use_cbam, cbam_ratio, cbam_kernels)
     mu_true, present = build_target(generator, lut, k)
     loss = build_loss(mu_true, mu_pred, present, min_vox)
     regression_model = models.Model(generator.inputs, loss)
@@ -254,7 +263,8 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
 
 
 def build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_level, conv_size, feat_count,
-                           feat_multiplier, activation, batch_norm, use_residuals, instance_norm=False):
+                           feat_multiplier, activation, batch_norm, use_residuals, instance_norm=False,
+                           use_cbam=False, cbam_ratio=4, cbam_kernels=(7, 7, 7, 3, 3)):
 
     # the QC net's encoder and head: conv encoder, max pool, two k-channel relu convolutions, and an
     # average over space, which keeps the location until the output.
@@ -262,7 +272,8 @@ def build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_leve
                               conv_size=conv_size, nb_features=feat_count, feat_mult=feat_multiplier,
                               nb_conv_per_level=nb_conv_per_level, activation=activation,
                               batch_norm=batch_norm, instance_norm=instance_norm,
-                              use_residuals=use_residuals, name='tm_enc')
+                              use_residuals=use_residuals, use_cbam=use_cbam, cbam_ratio=cbam_ratio,
+                              cbam_kernels=cbam_kernels, name='tm_enc')
     last = enc.outputs[0]
     conv_kwargs = {'padding': 'same', 'activation': 'relu', 'data_format': 'channels_last'}
     # the encoder pools after every level but the last, so this fifth pool is what makes the volume

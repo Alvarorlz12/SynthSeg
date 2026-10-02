@@ -75,6 +75,9 @@ def predict_tm(path_images,
                feat_multiplier=2,
                activation='relu',
                norm='instance',
+               use_cbam=False,
+               cbam_ratio=4,
+               cbam_kernels=(7, 7, 7, 3, 3),
                min_vox=8,
                recompute=True,
                verbose=True,
@@ -120,6 +123,10 @@ def predict_tm(path_images,
     :param norm: (optional) the normalisation the checkpoint was trained with, among 'instance', 'batch'
     and 'none'. It is an architecture argument and not a detail: a 'none' checkpoint holds no
     tm_enc_in_down_* layers at all. Default is 'instance'.
+    :param use_cbam: (optional) whether the checkpoint was trained with CBAM in the encoder. Architecture
+    argument, like norm. Default is False.
+    :param cbam_ratio: (optional) the checkpoint's channel attention reduction. Default is 4.
+    :param cbam_kernels: (optional) the checkpoint's spatial attention kernels. Default is (7, 7, 7, 3, 3).
     :param min_vox: (optional) a tissue with fewer voxels than this in the crop is left blank in the
     ground truth columns rather than averaged over nothing. Default is 8, training's own gate.
     :param recompute: (optional) whether to overwrite an existing output csv. Default is True.
@@ -174,7 +181,10 @@ def predict_tm(path_images,
                          unet_feat_count=unet_feat_count,
                          feat_multiplier=feat_multiplier,
                          activation=activation,
-                         norm=norm)
+                         norm=norm,
+                         use_cbam=use_cbam,
+                         cbam_ratio=cbam_ratio,
+                         cbam_kernels=cbam_kernels)
 
     print('preprocessing: cropping=%s  target_res=%s  pad_mode=%s  norm=%s%s'
           % (cropping, target_res, pad_mode, norm,
@@ -443,7 +453,8 @@ def preprocess(path_image, n_levels, target_res, path_gt=None, crop=None, min_pa
 
 
 def build_tm_model(path_model, input_shape, n_tissues, n_levels, nb_conv_per_level, conv_size,
-                   unet_feat_count, feat_multiplier, activation, norm):
+                   unet_feat_count, feat_multiplier, activation, norm, use_cbam=False, cbam_ratio=4,
+                   cbam_kernels=(7, 7, 7, 3, 3)):
     """predict.py's build_model, with the regressor's own graph imported rather than rebuilt."""
 
     assert os.path.isfile(path_model), "The provided model path does not exist."
@@ -455,12 +466,14 @@ def build_tm_model(path_model, input_shape, n_tissues, n_levels, nb_conv_per_lev
     # checkpoint trained with another norm is refused by load_weights_checked.
     instance_norm = (norm == 'instance')
     batch_norm = -1 if norm == 'batch' else None
-    print('architecture: norm=%s' % norm)
+    print('architecture: norm=%s%s' % (norm, '  cbam (ratio=%s, kernels=%s)' % (cbam_ratio, cbam_kernels)
+                                         if use_cbam else ''))
 
     img_in = KL.Input(shape=input_shape, name='val_image_input')
     stand_in = KM.Model(img_in, img_in)
     y = tm.build_regression_model(stand_in, input_shape, n_tissues, n_levels, nb_conv_per_level, conv_size,
-                                  unet_feat_count, feat_multiplier, activation, batch_norm, True, instance_norm)
+                                  unet_feat_count, feat_multiplier, activation, batch_norm, True, instance_norm,
+                                  use_cbam, cbam_ratio, cbam_kernels)
     net = KM.Model(stand_in.inputs, [y])
     tm.load_weights_checked(net, path_model)
     return net

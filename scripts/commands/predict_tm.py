@@ -76,6 +76,14 @@ parser.add_argument("--activation", type=str, dest="activation", default='relu',
 parser.add_argument("--norm", type=str, dest="norm", default='instance', choices=['instance', 'batch', 'none'],
                     help="the normalisation the checkpoint was TRAINED with. It is an architecture "
                          "argument: the wrong one is refused by load_weights_checked, not silently loaded.")
+parser.add_argument("--cbam", action='store_true', dest="use_cbam",
+                    help="a CBAM block (channel then spatial attention) on the conv arm of every encoder level, "
+                         "before the residual add. It is an architecture argument: a checkpoint trained without "
+                         "it has no *_cbam_* layers and is refused by load_weights_checked.")
+parser.add_argument("--cbam_ratio", type=int, dest="cbam_ratio", default=4,
+                    help="reduction of the channel attention MLP. Default 4")
+parser.add_argument("--cbam_kernels", type=int, nargs='+', dest="cbam_kernels", default=[7, 7, 7, 3, 3],
+                    help="spatial attention kernel: one value for every level, or one per level. Default 7 7 7 3 3")
 
 # Misc
 parser.add_argument("--min_vox", type=int, dest="min_vox", default=8,
@@ -90,4 +98,6 @@ if __name__ == '__main__':
     args = vars(parser.parse_args())
     if args.pop('no_resample'):
         args['target_res'] = None
+    if len(args['cbam_kernels']) == 1:
+        args['cbam_kernels'] = args['cbam_kernels'][0]
     predict_tm(**args)

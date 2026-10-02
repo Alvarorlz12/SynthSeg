@@ -57,6 +57,45 @@ class InstanceNormalization(KL.Layer):
         return config
 
 
+def _channel_attention(x, ratio, name):
+    """
+    CAM: Channel Attention Module.
+    A channel gate from the avg- and max-pooled
+    features through a shared MLP.
+    """
+    c = int(x.get_shape()[-1])
+    hidden = max(c // ratio, 1)
+    # the MLP is shared so the 2 Dense layers are built once and called on both descriptors
+    fc0 = KL.Dense(hidden, activation='relu', name=name + '_fc0')
+    fc1 = KL.Dense(c, name=name + '_fc1')
+    avg_pool = fc1(fc0(KL.GlobalAveragePooling3D(name=name + '_avg')(x)))
+    max_pool = fc1(fc0(KL.GlobalMaxPooling3D(name=name + '_max')(x)))
+    gate = KL.Add(name=name + '_add')([avg_pool, max_pool])
+    gate = KL.Activation('sigmoid', name=name + '_sigmoid')(gate)
+    gate = KL.Reshape((1, 1, 1, c), name=name + '_reshape')(gate)
+    return KL.Multiply(name=name + '_mul')([x, gate])
+
+def _spatial_attention(x, kernel_size, name):
+    """
+    SAM: Spatial Attention Module.
+    A voxel gate from the channel-wise mean and max, through a convolution.
+    """
+    avg_pool = KL.Lambda(lambda t: K.mean(t, axis=-1, keepdims=True), name=name + '_avg')(x)
+    max_pool = KL.Lambda(lambda t: K.max(t, axis=-1, keepdims=True), name=name + '_max')(x)
+    concat = KL.Concatenate(axis=-1, name=name + '_concat')([avg_pool, max_pool])
+    gate = KL.Conv3D(1, kernel_size, padding='same', activation='sigmoid',
+                     name=name + '_conv')(concat)
+    return KL.Multiply(name=name + '_mul')([x, gate])
+
+def cbam(x, ratio=8, kernel_size=7, name='cbam'):
+    """
+    CBAM: Convolutional Block Attention Module (Woo et al., 2018)
+        [https://doi.org/10.1007/978-3-030-01234-2_1]
+    Channel attention followed by spatial attention.
+    """
+    x = _channel_attention(x, ratio, name=name + '_cam')
+    return _spatial_attention(x, kernel_size, name=name + '_sam')
+
 def unet(nb_features,
          input_shape,
          nb_levels,
@@ -304,13 +343,29 @@ def conv_enc(nb_features,
              conv_dropout=0,
              batch_norm=None,
              instance_norm=False,
+             use_cbam=False,
+             cbam_ratio=4,
+             cbam_kernels=7,
              input_model=None):
-    """Fully Convolutional Encoder"""
+    """Fully Convolutional Encoder
+
+    use_cbam puts a CBAM block on the conv arm of every level, after the convolutions and before the residual
+    add, so it gates what the level adds and not the identity path. cbam_ratio is the reduction of the channel
+    MLP, and cbam_kernels the spatial attention kernel, one int for all levels or one per level.
+    """
 
     # naming
     model_name = name
     if prefix is None:
         prefix = model_name
+
+    # the spatial kernel goes by level index: at prediction time the spatial shape is None
+    if isinstance(cbam_kernels, int):
+        cbam_kernels = [cbam_kernels] * nb_levels
+    if use_cbam:
+        assert len(input_shape) == 4, 'cbam is only implemented in 3D'
+        assert len(cbam_kernels) == nb_levels, \
+            'cbam_kernels needs one kernel per level (%d), got %d' % (nb_levels, len(cbam_kernels))
 
     # first layer: input
     name = '%s_input' % prefix
@@ -357,6 +412,10 @@ def conv_enc(nb_features,
                 name = '%s_dropout_downarm_%d_%d' % (prefix, level, conv)
                 noise_shape = [None, *[1] * ndims, nb_lvl_feats]
                 last_tensor = KL.Dropout(conv_dropout, noise_shape=noise_shape, name=name)(last_tensor)
+
+        if use_cbam:
+            name = '%s_cbam_%d' % (prefix, level)
+            last_tensor = cbam(last_tensor, ratio=cbam_ratio, kernel_size=cbam_kernels[level], name=name)
 
         if use_residuals:
             convarm_layer = last_tensor

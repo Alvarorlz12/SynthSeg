@@ -85,6 +85,9 @@ def validate_training(image_dir,
                       feat_multiplier=2,
                       activation='relu',
                       norm='instance',
+                      use_cbam=False,
+                      cbam_ratio=4,
+                      cbam_kernels=(7, 7, 7, 3, 3),
                       min_vox=8,
                       recompute=False,
                       cache='auto',
@@ -113,6 +116,10 @@ def validate_training(image_dir,
     :param norm: (optional) the normalisation the checkpoints were TRAINED with, among 'instance', 'batch' and 'none'.
     It is an architecture argument, not a detail: the wrong one is refused by load_weights_checked rather than
     silently loaded. Default is 'instance'.
+    :param use_cbam: (optional) whether the checkpoints were trained with CBAM in the encoder. Architecture argument,
+    like norm. Default is False.
+    :param cbam_ratio: (optional) the checkpoints' channel attention reduction. Default is 4.
+    :param cbam_kernels: (optional) the checkpoints' spatial attention kernels. Default is (7, 7, 7, 3, 3).
     :param min_vox: (optional) a tissue with fewer voxels than this in the crop is left blank in the ground truth
     columns rather than averaged over nothing. Default is 8, training's own gate.
     :param recompute: (optional) whether to recompute result files even if they already exist. A csv with fewer
@@ -170,6 +177,9 @@ def validate_training(image_dir,
                        feat_multiplier=feat_multiplier,
                        activation=activation,
                        norm=norm,
+                       use_cbam=use_cbam,
+                       cbam_ratio=cbam_ratio,
+                       cbam_kernels=cbam_kernels,
                        min_vox=min_vox,
                        recompute=True,
                        verbose=False,

@@ -107,6 +107,14 @@ parser.add_argument("--batch_norm", type=str, dest="batch_norm", default='-1',
                          "Only read when --norm batch.")
 parser.add_argument("--no_residuals", action='store_true', dest="no_residuals",
                     help="drop the per-level residual connection")
+parser.add_argument("--cbam", action='store_true', dest="use_cbam",
+                    help="a CBAM block (channel then spatial attention) on the conv arm of every encoder level, "
+                         "before the residual add. It is an architecture argument: a checkpoint trained without "
+                         "it has no *_cbam_* layers and is refused by load_weights_checked.")
+parser.add_argument("--cbam_ratio", type=int, dest="cbam_ratio", default=4,
+                    help="reduction of the channel attention MLP. Default 4")
+parser.add_argument("--cbam_kernels", type=int, nargs='+', dest="cbam_kernels", default=[7, 7, 7, 3, 3],
+                    help="spatial attention kernel: one value for every level, or one per level. Default 7 7 7 3 3")
 
 # Training parameters
 parser.add_argument("--lr", type=float, dest="lr", default=1e-4, help="learning rate")
@@ -138,5 +146,7 @@ if norm == 'batch':
 else:
     args['batch_norm'] = None
 args['use_residuals'] = not args.pop('no_residuals')
+if len(args['cbam_kernels']) == 1:
+    args['cbam_kernels'] = args['cbam_kernels'][0]
 
 training(**args)
