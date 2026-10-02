@@ -43,7 +43,7 @@ parser.add_argument("validation_main_dir", type=str, help="folder the per-epoch 
 # What to validate
 parser.add_argument("--tissues", type=str, dest="tissues", default=None,
                     help="groups the checkpoints were trained with; it fixes the width of the output. "
-                         "Default: every key of QC.training_tm.tissue_groups, in its order.")
+                         "Default: QC.training_tm.all_tissues; a training from before 2026-10-02 needs the legacy nine.")
 parser.add_argument("--step_eval", type=int, dest="step_eval", default=1,
                     help="validate one checkpoint every step_eval, to sketch a curve before filling it in")
 

@@ -93,7 +93,7 @@ def predict_tm(path_images,
 
     :param tissues: (optional) comma separated groups to read, among the keys of QC.training_tm.tissue_groups
     and in the order the checkpoint was trained with, since it fixes the width of the output. Default is
-    None: all of them, in the dict's order.
+    None: QC.training_tm.all_tissues. A checkpoint from before 2026-10-02 needs legacy_tissues here.
     :param gt_folder: (optional) folder of segmentations, one per image, paired in sorted order. Turns on
     the ground truth columns: the same per-tissue means read off the segmentation, on the same crop of
     the same normalised volume, plus the absolute error on the deliverable. Any label map with the
@@ -232,13 +232,9 @@ def predict_tm(path_images,
 
 
 def resolve_tissues(tissues):
-    """None means every group, in the dict's order; a comma-separated string or a list is checked against
-    the groups the target is defined on."""
-    tissues = list(tm.tissue_groups) if tissues is None \
-        else [t.strip() for t in tissues.split(',')] if isinstance(tissues, str) else list(tissues)
-    for t in tissues:
-        assert t in tm.tissue_groups, 'unknown tissue %r, expected among %s' % (t, list(tm.tissue_groups))
-    return tissues
+    """None means all_tissues; a comma-separated string or a list is checked against the groups the target
+    is defined on."""
+    return list(tm.all_tissues) if tissues is None else tm.parse_tissues(tissues)
 
 
 def window(cropping):

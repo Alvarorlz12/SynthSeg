@@ -43,8 +43,8 @@ parser.add_argument("--gt", type=str, dest="gt_folder", default=None,
                     help="folder of segmentations, one per image, paired in SORTED ORDER. Adds the "
                          "true_* columns and the error on the deliverable.")
 parser.add_argument("--tissues", type=str, dest="tissues", default=None,
-                    help="groups the checkpoint regresses, in the order it was trained with. Default: every "
-                         "key of QC.training_tm.tissue_groups, in its order.")
+                    help="groups the checkpoint regresses, in the order it was trained with. Default: "
+                         "QC.training_tm.all_tissues; a checkpoint from before 2026-10-02 needs the legacy nine.")
 
 # Saving paths
 parser.add_argument("--resampled", type=str, dest="path_resampled", default=None,

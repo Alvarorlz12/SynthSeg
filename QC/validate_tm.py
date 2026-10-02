@@ -101,7 +101,8 @@ def validate_training(image_dir,
     :param models_dir: path of the folder with the models to validate.
     :param validation_main_dir: path of the folder where all the models validation subfolders will be saved.
     :param tissues: (optional) comma separated groups the checkpoints were trained with, since that fixes
-    the width of the output. Default is None: every key of QC.training_tm.tissue_groups, in its order.
+    the width of the output. Default is None: QC.training_tm.all_tissues. A training from before 2026-10-02
+    needs legacy_tissues here.
     :param step_eval: (optional) If step_eval > 1 skips models when validating, by validating on models step_eval apart.
     :param cropping: (optional) the window the network sees, cropped around the centre of the volume and padded up to
     the same size when the head is smaller. Default is 160, the shape training cropped to. It is the only window knob.

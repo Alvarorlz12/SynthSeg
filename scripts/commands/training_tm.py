@@ -61,7 +61,7 @@ parser.add_argument("--generation_classes", type=str, dest="generation_classes",
                          "regressed tissue in a single class.")
 parser.add_argument("--tissues", type=str, dest="tissues", default=None,
                     help="comma separated groups to regress, among the keys of QC.training_tm.tissue_groups, "
-                         "in output order. It fixes the width of the output. Default: all of them.")
+                         "in output order. It fixes the width of the output. Default: QC.training_tm.all_tissues.")
 parser.add_argument("--neutral_labels", type=int, dest="n_neutral_labels", default=19,
                     help="number of non-lateral labels in generation_labels. It has to match the array: "
                          "the flip pairs the rest left to right and an odd remainder is refused.")

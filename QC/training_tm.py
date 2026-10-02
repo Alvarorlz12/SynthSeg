@@ -56,12 +56,14 @@ from ext.neuron import models as nrn_models
 
 eps = 1e-6
 
-# the regressed groups, in output order: output j is the j-th key. each group must sit inside a single
-# generation class, otherwise its mean would mix intensities from several draws (check_alignment refuses it).
-# nine groups since the ungrouping of 2026-09-09; scripts/experiments/make_9groups_classes.py builds the
-# matching generation_classes_9groups.npy and prints this dict.
+# the groups a target can be defined on. which ones a model regresses, and in which order (output j is the
+# j-th), is all_tissues or --tissues. each regressed group must sit inside a single generation class,
+# otherwise its mean would mix intensities from several draws (check_alignment refuses it). nine groups
+# since the ungrouping of 2026-09-09; scripts/experiments/make_9groups_classes.py builds the matching
+# generation_classes_9groups.npy.
 tissue_groups = {
-    'csf_ventricular':      [4, 5, 14, 15, 43, 44],   # lateral + inf-lateral ventricles l/r, 3rd, 4th
+    'csf_lateral':          [4, 5, 43, 44],           # lateral + inf-lateral ventricles l/r
+    'csf_ventricular':      [4, 5, 14, 15, 43, 44],   # the same, plus the 3rd and 4th
     'gm_cortex':            [3, 42],
     'gm_cerebellum':        [8, 47],
     'thalamus':             [10, 49],
@@ -71,8 +73,14 @@ tissue_groups = {
     'wm_cerebral':          [2, 41],
     'wm_cerebellum':        [7, 46],
 }
-# derived, never written twice: the check on --tissues and check_alignment both read it
-all_tissues = list(tissue_groups)
+# the nine a model regresses by default. since 2026-10-02 the csf target is csf_lateral: the 3rd and 4th
+# ventricles are thin or against the brainstem, mostly partial volume, and 12 % of the ventricular voxels;
+# the inferior laterals are 3 % and barely move the mean. both csf groups sit in generation class 1.
+all_tissues = ['csf_lateral', 'gm_cortex', 'gm_cerebellum', 'thalamus', 'putamen', 'pallidum',
+               'hippocampus_amygdala', 'wm_cerebral', 'wm_cerebellum']
+# the nine of every checkpoint trained before 2026-10-02 (the *9groups* runs). same width as all_tissues, so
+# a checkpoint loads under either and nothing tells them apart: score those with --tissues set to these.
+legacy_tissues = ['csf_ventricular'] + all_tissues[1:]
 
 
 def training(labels_dir,
@@ -126,7 +134,7 @@ def training(labels_dir,
     what ties each tissue to a single intensity).
 
     :param tissues: (optional) comma separated groups to regress, among the keys of tissue_groups, in the
-    order the outputs take. Default is None: all of them, in the dict's order.
+    order the outputs take. Default is None: all_tissues.
     :param batchsize: (optional) number of images per minibatch. Default is 1.
     :param output_shape: (optional) shape of the cropped output image. Default is 160.
 
@@ -190,9 +198,7 @@ def training(labels_dir,
     # prepare labels and tissues
     gen_labels = np.asarray(utils.load_array_if_path(generation_labels)).astype('int32')
     gen_classes = np.asarray(utils.load_array_if_path(generation_classes)).astype('int32')
-    names = list(all_tissues) if tissues is None \
-        else [t.strip().lower() for t in tissues.split(',') if t.strip()]
-    assert names and all(t in all_tissues for t in names), 'pick tissues among %s' % all_tissues
+    names = list(all_tissues) if tissues is None else parse_tissues(tissues)
 
     # every map in labels_dir trains: labels_dir is already the training partition of a frozen split.
     # sorted so that a given seed means the same stream whatever order the filesystem lists the folder in.
@@ -346,13 +352,22 @@ def check_alignment(gen_labels, gen_classes, names):
     # draws. the other tissues are printed too (diagnostic) but do not gate the check.
     lab2gen = {int(l): int(c) for l, c in zip(gen_labels, gen_classes)}
     ok = True
-    for name in all_tissues:
+    for name in tissue_groups:
         classes = sorted(set(lab2gen[l] for l in tissue_groups[name] if l in lab2gen))
         print('  %-21s -> generation class(es) %s' % (name, classes))
         if name in names and len(classes) > 1:
             ok = False
     if not ok:
         raise ValueError('regressed tissue groups are not aligned with the generation classes (see above)')
+
+
+def parse_tissues(tissues):
+    """A comma-separated string or a list of groups, checked against tissue_groups."""
+    names = [t.strip().lower() for t in tissues.split(',') if t.strip()] if isinstance(tissues, str) \
+        else list(tissues)
+    assert names and all(t in tissue_groups for t in names), \
+        'pick tissues among %s, got %s' % (list(tissue_groups), names)
+    return names
 
 
 def load_weights_checked(model, path):
