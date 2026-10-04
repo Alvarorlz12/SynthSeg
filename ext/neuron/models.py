@@ -32,13 +32,14 @@ class InstanceNormalization(KL.Layer):
     the per-image statistics vary a lot.
     """
 
-    def __init__(self, eps=1e-5, **kwargs):
+    def __init__(self, eps=1e-5, gamma_initializer='ones', **kwargs):
         super(InstanceNormalization, self).__init__(**kwargs)
         self.eps = eps
+        self.gamma_initializer = gamma_initializer
 
     def build(self, input_shape):
         c = int(input_shape[-1])
-        self.gamma = self.add_weight(name='gamma', shape=(c,), initializer='ones', trainable=True)
+        self.gamma = self.add_weight(name='gamma', shape=(c,), initializer=self.gamma_initializer, trainable=True)
         self.beta = self.add_weight(name='beta', shape=(c,), initializer='zeros', trainable=True)
         super(InstanceNormalization, self).build(input_shape)
 
@@ -53,7 +54,7 @@ class InstanceNormalization(KL.Layer):
 
     def get_config(self):
         config = super(InstanceNormalization, self).get_config()
-        config.update({'eps': self.eps})
+        config.update({'eps': self.eps, 'gamma_initializer': self.gamma_initializer})
         return config
 
 
@@ -78,13 +79,17 @@ def _channel_attention(x, ratio, name):
 def _spatial_attention(x, kernel_size, name):
     """
     SAM: Spatial Attention Module.
-    A voxel gate from the channel-wise mean and max, through a convolution.
+    A voxel gate from the channel-wise max and mean, through a bias-free convolution, a normalisation and a
+    sigmoid. The official CBAM normalises with BatchNorm; at batch size 1 a BatchNorm trains as an instance
+    norm and then swaps in its moving averages at inference, so an instance norm is used instead. Its gamma
+    starts at 0, as the official ResNet initialises the SpatialGate BatchNorm: the gate starts at 0.5 everywhere.
     """
-    avg_pool = KL.Lambda(lambda t: K.mean(t, axis=-1, keepdims=True), name=name + '_avg')(x)
     max_pool = KL.Lambda(lambda t: K.max(t, axis=-1, keepdims=True), name=name + '_max')(x)
-    concat = KL.Concatenate(axis=-1, name=name + '_concat')([avg_pool, max_pool])
-    gate = KL.Conv3D(1, kernel_size, padding='same', activation='sigmoid',
-                     name=name + '_conv')(concat)
+    avg_pool = KL.Lambda(lambda t: K.mean(t, axis=-1, keepdims=True), name=name + '_avg')(x)
+    concat = KL.Concatenate(axis=-1, name=name + '_concat')([max_pool, avg_pool])
+    logit = KL.Conv3D(1, kernel_size, padding='same', use_bias=False, name=name + '_conv')(concat)
+    logit = InstanceNormalization(gamma_initializer='zeros', name=name + '_in')(logit)
+    gate = KL.Activation('sigmoid', name=name + '_sigmoid')(logit)
     return KL.Multiply(name=name + '_mul')([x, gate])
 
 def cbam(x, ratio=8, kernel_size=7, name='cbam'):

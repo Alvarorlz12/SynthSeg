@@ -87,7 +87,7 @@ def validate_training(image_dir,
                       norm='instance',
                       use_cbam=False,
                       cbam_ratio=4,
-                      cbam_kernels=(7, 7, 7, 3, 3),
+                      cbam_kernels=7,
                       min_vox=8,
                       recompute=False,
                       cache='auto',
@@ -120,7 +120,7 @@ def validate_training(image_dir,
     :param use_cbam: (optional) whether the checkpoints were trained with CBAM in the encoder. Architecture argument,
     like norm. Default is False.
     :param cbam_ratio: (optional) the checkpoints' channel attention reduction. Default is 4.
-    :param cbam_kernels: (optional) the checkpoints' spatial attention kernels. Default is (7, 7, 7, 3, 3).
+    :param cbam_kernels: (optional) the checkpoints' spatial attention kernels. Default is 7 on every level.
     :param min_vox: (optional) a tissue with fewer voxels than this in the crop is left blank in the ground truth
     columns rather than averaged over nothing. Default is 8, training's own gate.
     :param recompute: (optional) whether to recompute result files even if they already exist. A csv with fewer

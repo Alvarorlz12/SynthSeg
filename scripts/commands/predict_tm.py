@@ -82,8 +82,8 @@ parser.add_argument("--cbam", action='store_true', dest="use_cbam",
                          "it has no *_cbam_* layers and is refused by load_weights_checked.")
 parser.add_argument("--cbam_ratio", type=int, dest="cbam_ratio", default=4,
                     help="reduction of the channel attention MLP. Default 4")
-parser.add_argument("--cbam_kernels", type=int, nargs='+', dest="cbam_kernels", default=[7, 7, 7, 3, 3],
-                    help="spatial attention kernel: one value for every level, or one per level. Default 7 7 7 3 3")
+parser.add_argument("--cbam_kernels", type=int, nargs='+', dest="cbam_kernels", default=[7],
+                    help="spatial attention kernel: one value for every level, or one per level. Default 7")
 
 # Misc
 parser.add_argument("--min_vox", type=int, dest="min_vox", default=8,

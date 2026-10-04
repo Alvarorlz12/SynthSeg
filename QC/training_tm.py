@@ -117,7 +117,7 @@ def training(labels_dir,
              use_residuals=True,
              use_cbam=False,
              cbam_ratio=4,
-             cbam_kernels=(7, 7, 7, 3, 3),
+             cbam_kernels=7,
              lr=1e-4,
              clipnorm=0.,
              epochs=100,
@@ -181,8 +181,7 @@ def training(labels_dir,
     encoder level, before the residual add. The head is left as it is. Default is False.
     :param cbam_ratio: (optional) reduction of the channel attention MLP. Default is 4.
     :param cbam_kernels: (optional) spatial attention kernel, one int for all levels or one per level, so a
-    list has to have n_levels entries. Default is (7, 7, 7, 3, 3): 7 while the map is large, 3 on the
-    20^3 and 10^3 maps, where a 7^3 kernel would mostly see the zero padding.
+    list has to have n_levels entries. Default is 7 on every level, as in the official CBAM.
 
     # training
     :param lr: (optional) learning rate. Default is 1e-4.
@@ -270,7 +269,7 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
 
 def build_regression_model(generator, image_shape, k, n_levels, nb_conv_per_level, conv_size, feat_count,
                            feat_multiplier, activation, batch_norm, use_residuals, instance_norm=False,
-                           use_cbam=False, cbam_ratio=4, cbam_kernels=(7, 7, 7, 3, 3)):
+                           use_cbam=False, cbam_ratio=4, cbam_kernels=7):
 
     # the QC net's encoder and head: conv encoder, max pool, two k-channel relu convolutions, and an
     # average over space, which keeps the location until the output.

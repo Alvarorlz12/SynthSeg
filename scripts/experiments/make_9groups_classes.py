@@ -20,10 +20,19 @@ What changes with respect to generation_classes_extra531_3tissues.npy, which reg
 Left/right stay merged, as in the 3-tissue array this replaces. Stock SynthSeg never merges left and
 right; that deviation is inherited on purpose so this run changes one thing only, the regrouping.
 
+--csf lateral (2026-10-04) writes generation_classes_9groups_lat.npy for the csf_lateral target: the class of
+the regressed CSF holds only the lateral and inferior-lateral ventricles (4, 5, 43, 44), and the 3rd (14) and 4th
+(15) ventricles get one Gaussian each, like every other structure that is generated but not regressed. Without it
+csf_lateral sits inside the ventricular class, so it shares its intensity with the 3rd and 4th ventricles and
+differs from the old target only by partial volume. The two new classes are appended at the end, so every other
+class keeps its index.
+
 Run from the SynthQC directory:
 
-    python scripts/experiments/make_9groups_classes.py
+    python scripts/experiments/make_9groups_classes.py                  # generation_classes_9groups.npy
+    python scripts/experiments/make_9groups_classes.py --csf lateral    # generation_classes_9groups_lat.npy
 """
+import argparse
 import hashlib
 import json
 import os
@@ -31,9 +40,16 @@ from datetime import datetime, timezone
 
 import numpy as np
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--csf', choices=['ventricular', 'lateral'], default='ventricular',
+                    help='regressed CSF: all ventricles in one class (the original), or the lateral ones with the '
+                         '3rd and 4th in classes of their own')
+args = parser.parse_args()
+SUFFIX = '' if args.csf == 'ventricular' else '_lat'
+
 PRIORS = 'data/labels_classes_priors/'
 OUT_DIR = os.path.join(PRIORS, 'extra_cerebral_531')
-OUT = os.path.join(OUT_DIR, 'generation_classes_9groups.npy')
+OUT = os.path.join(OUT_DIR, 'generation_classes_9groups%s.npy' % SUFFIX)
 
 # One entry per generation class, in order: a class index is this list's position.
 GENERATION_CLASSES = [
@@ -63,9 +79,12 @@ GENERATION_CLASSES = [
     ('vessel',              [30, 62]),
 ] + [('extracerebral_%d' % lab, [lab]) for lab in
      (502, 506, 507, 508, 509, 511, 512, 514, 515, 516, 530)]
+if args.csf == 'lateral':
+    GENERATION_CLASSES[1] = ('csf_lateral', [4, 5, 43, 44])
+    GENERATION_CLASSES += [('third_ventricle', [14]), ('fourth_ventricle', [15])]
 
 # The nine numbers the head predicts, in output order. Each name must be a class above.
-REGRESSED = ['csf_ventricular',
+REGRESSED = ['csf_%s' % args.csf,
              'gm_cortex', 'gm_cerebellum', 'thalamus', 'putamen', 'pallidum', 'hippocampus_amygdala',
              'wm_cerebral', 'wm_cerebellum']
 
@@ -108,8 +127,12 @@ md5 = hashlib.md5(open(OUT, 'rb').read()).hexdigest()
 json.dump({
     'built_by': 'scripts/experiments/make_9groups_classes.py',
     'generated_utc': datetime.now(timezone.utc).isoformat(),
-    'for': 'the tissue-means head (QC/training_tm.py) after the ungrouping agreed on 2026-09-09',
-    'replaces': 'generation_classes_extra531_3tissues.npy, which regressed three numbers (CSF, GM, WM)',
+    'for': 'the tissue-means head (QC/training_tm.py) after the ungrouping agreed on 2026-09-09'
+           + ('' if args.csf == 'ventricular' else ', csf_lateral target with the 3rd and 4th ventricles generated '
+                                                   'apart (2026-10-04)'),
+    'replaces': ('generation_classes_extra531_3tissues.npy, which regressed three numbers (CSF, GM, WM)'
+                 if args.csf == 'ventricular' else
+                 'generation_classes_9groups.npy, where the 3rd and 4th ventricles share the regressed CSF class'),
     'pairs_with': 'generation_labels_extra531.npy (unchanged, 55 labels, 19 neutral)',
     'MUST_PASS_ON_CLI': '--neutral_labels 19',
     'n_labels': int(len(out)),
@@ -121,7 +144,7 @@ json.dump({
     'generated_but_not_regressed': [name for name, _ in GENERATION_CLASSES
                                     if name not in tissue_groups and name != 'background'],
     'md5_npy': md5,
-}, open(os.path.join(OUT_DIR, 'README_9groups.json'), 'w'), indent=2)
+}, open(os.path.join(OUT_DIR, 'README_9groups%s.json' % SUFFIX), 'w'), indent=2)
 
 print('\nsaved %s\n  %d labels, %d classes, %d regressed, md5 %s'
       % (OUT, len(out), len(unique), len(REGRESSED), md5))

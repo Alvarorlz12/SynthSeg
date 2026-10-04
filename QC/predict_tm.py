@@ -77,7 +77,7 @@ def predict_tm(path_images,
                norm='instance',
                use_cbam=False,
                cbam_ratio=4,
-               cbam_kernels=(7, 7, 7, 3, 3),
+               cbam_kernels=7,
                min_vox=8,
                recompute=True,
                verbose=True,
@@ -126,7 +126,7 @@ def predict_tm(path_images,
     :param use_cbam: (optional) whether the checkpoint was trained with CBAM in the encoder. Architecture
     argument, like norm. Default is False.
     :param cbam_ratio: (optional) the checkpoint's channel attention reduction. Default is 4.
-    :param cbam_kernels: (optional) the checkpoint's spatial attention kernels. Default is (7, 7, 7, 3, 3).
+    :param cbam_kernels: (optional) the checkpoint's spatial attention kernels. Default is 7 on every level.
     :param min_vox: (optional) a tissue with fewer voxels than this in the crop is left blank in the
     ground truth columns rather than averaged over nothing. Default is 8, training's own gate.
     :param recompute: (optional) whether to overwrite an existing output csv. Default is True.
@@ -450,7 +450,7 @@ def preprocess(path_image, n_levels, target_res, path_gt=None, crop=None, min_pa
 
 def build_tm_model(path_model, input_shape, n_tissues, n_levels, nb_conv_per_level, conv_size,
                    unet_feat_count, feat_multiplier, activation, norm, use_cbam=False, cbam_ratio=4,
-                   cbam_kernels=(7, 7, 7, 3, 3)):
+                   cbam_kernels=7):
     """predict.py's build_model, with the regressor's own graph imported rather than rebuilt."""
 
     assert os.path.isfile(path_model), "The provided model path does not exist."
