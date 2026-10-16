@@ -72,6 +72,13 @@ parser.add_argument('--slice_profile', type=str, dest='slice_profile', default='
 parser.add_argument('--thickness_min_frac', type=float, dest='thickness_min_frac', default=0.,
                     help='lower bound of the slice thickness draw, as a fraction of the drawn spacing. '
                          '0 is the stock U(atlas_res, spacing), 0.7 the range a real gap leaves. default 0')
+parser.add_argument('--mask_edges_prob', type=float, dest='mask_edges_prob', default=0.,
+                    help='probability of zeroing random bands at the edges of the image (MaskEdges, the '
+                         'three axes at once), as a short field of view leaves them. default 0, off')
+parser.add_argument('--mask_edges_min', type=float, dest='mask_edges_min', default=.02,
+                    help='smallest width of each band as a fraction of the axis. default 0.02')
+parser.add_argument('--mask_edges_max', type=float, dest='mask_edges_max', default=.1,
+                    help='largest width of each band as a fraction of the axis. default 0.1')
 parser.add_argument('--no_deform', action='store_true', dest='no_deform')
 parser.add_argument('--bias_std', type=float, dest='bias_field_std', default=0.)
 parser.add_argument('--bias_scale', type=float, dest='bias_scale', default=.025)

@@ -57,6 +57,7 @@ from SynthSeg.model_inputs import build_model_inputs
 
 # third-party imports
 from ext.lab2im import utils
+from ext.lab2im import layers
 from ext.neuron import models as nrn_models
 
 # the checkpoint guard and the training loop are the tissue-means ones. the network is built below
@@ -79,6 +80,9 @@ def training(labels_dir,
              res_prob_min=0.2,
              slice_profile='gaussian',
              thickness_min_frac=0.,
+             mask_edges_prob=0.,
+             mask_edges_min=.02,
+             mask_edges_max=.1,
              batchsize=1,
              output_shape=160,
              flipping=True,
@@ -126,6 +130,14 @@ def training(labels_dir,
     :param thickness_min_frac: (optional) lower bound of the slice thickness draw, as a fraction of the
     sampled resolution. 0 is the stock U(atlas_res, resolution); 0.7 covers the range a real gap leaves
     and drops the physically impossible thin slices; 1 forces a contiguous acquisition. Default is 0.
+    :param mask_edges_prob: (optional) probability of zeroing bands at the edges of the image (lab2im's
+    MaskEdges, on the three axes at once), after the re-normalisation, so the network sees the exact zeros
+    a real scan with a shorter field of view leaves once padded to the window. Default 0, i.e. off.
+    :param mask_edges_min: (optional) smallest width of each band, as a fraction of the axis, so that a
+    volume drawn for masking always shows a band, rather than leaving a width near 0 to the uniform and the
+    probability to mask_edges_prob. Default 0.02, i.e. 3 voxels at 160.
+    :param mask_edges_max: (optional) largest width of each band, as a fraction of the axis; the width is
+    drawn uniformly between the two on each side of each axis. Default 0.1, i.e. 16 voxels at 160.
     :param res_prob_min: (optional) probability of drawing the native resolution on every axis, i.e. of a
     1 mm isotropic volume. Default 0.2.
     :param synthseg_sampler: (optional) fall back to SynthSeg's own sampler, which either shares one
@@ -197,7 +209,9 @@ def training(labels_dir,
                                 res_uniform_per_axis=not synthseg_sampler,
                                 res_prob_min=res_prob_min,
                                 slice_profile=slice_profile,
-                                thickness_min_frac=thickness_min_frac)
+                                thickness_min_frac=thickness_min_frac,
+                                mask_edges_prob=mask_edges_prob, mask_edges_min=mask_edges_min,
+                                mask_edges_max=mask_edges_max)
     image_shape = generator.outputs[0].get_shape().as_list()[1:]
 
     # target and prediction. k=3: one spacing per array axis.
@@ -220,6 +234,8 @@ def training(labels_dir,
     print('  max_res_iso %.2f  max_res_aniso %.2f  prob_native %.2f  sampler %s  bias_field_std %.2f'
           % (max_res_iso, max_res_aniso, res_prob_min,
              'synthseg' if synthseg_sampler else 'uniform-per-axis', bias_field_std))
+    print('  mask_edges_prob %.2f  mask_edges_min %.3f  mask_edges_max %.3f'
+          % (mask_edges_prob, mask_edges_min, mask_edges_max))
 
     # prefix 'rs' names the checkpoints rs_###.h5.
     train_model(regression_model, input_generator, lr, epochs, steps_per_epoch, model_dir, checkpoint,
@@ -231,7 +247,8 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
                     nonlin_std, nonlin_scale, max_res_iso, max_res_aniso,
                     bias_field_std, bias_scale, gamma_std, clip, flipping=True,
                     res_uniform_per_axis=True, res_prob_min=0.2,
-                    slice_profile='gaussian', thickness_min_frac=0.):
+                    slice_profile='gaussian', thickness_min_frac=0., mask_edges_prob=0., mask_edges_min=.02,
+                    mask_edges_max=.1):
 
     # randomise_res=True is what draws the spacing, and return_resolution asserts it. return_bias_std is
     # pinned False so 'resolution' lands at outputs[2] rather than behind 'bias_field_std'.
@@ -261,6 +278,15 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
         return (x - mn) / K.maximum(mx - mn, K.epsilon())
 
     image = KL.Lambda(_minmax, name='rs_renorm')(gen.outputs[0])
+
+    # bands of exact zeros at the edges, the field of view a real scan lacks once padded to the window.
+    # after the re-normalisation, as in deployment, where the padding comes after the normalisation.
+    if mask_edges_prob > 0:
+        # MaskEdges rows are [a, b, c, d]: zeros from row 0 to U(a, b)*n and from U(c, d)*n to the end.
+        # its upper draw stops at d*n - 1, so the end band is one voxel wider than the start one.
+        bounds = np.array([[mask_edges_min, mask_edges_max, 1. - mask_edges_max, 1. - mask_edges_min]] * 3)
+        image = layers.MaskEdges(axes=[1, 2, 3], boundaries=bounds, prob_mask=mask_edges_prob,
+                                 name='rs_mask_edges')(image)[0]
     return models.Model(gen.inputs, [image] + gen.outputs[1:])
 
 
