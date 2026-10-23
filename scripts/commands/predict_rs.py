@@ -53,9 +53,9 @@ parser.add_argument("--no_resample", action='store_true', dest="no_resample",
 parser.add_argument("--minmax_norm", action='store_true', dest="minmax_norm",
                     help="normalise with an exact min-max instead of the p0.5-p99.5 default of "
                          "predict.py. The min-max is what training ends on")
-parser.add_argument("--pad_mode", type=str, dest="pad_mode", default='constant', choices=['constant', 'edge', 'auto'],
+parser.add_argument("--pad_mode", type=str, dest="pad_mode", default='constant', choices=['constant', 'edge', 'reflect', 'auto'],
                     help="what is done with an axis shorter than the window: zeros (constant, default, as in "
-                         "predict.py), the outermost plane repeated (edge), or zeros up to 2 mm and cut down to a multiple of 32 "
+                         "predict.py), the outermost plane repeated (edge), the volume mirrored about it (reflect), or zeros up to 2 mm and cut down to a multiple of 32 "
                          "beyond (auto)")
 
 # Architecture parameters
@@ -77,6 +77,9 @@ parser.add_argument("--n_jobs", type=int, dest="n_jobs", default=None,
                          "Default: the job's CPUs but one; 1 runs it in the main process")
 parser.add_argument("--no_recompute", action='store_false', dest="recompute",
                     help="leave an existing output csv alone instead of overwriting it")
+parser.add_argument("--true_csv", type=str, dest="true_csv", default=None,
+                    help="csv with the truth of each image (subject, true_R/A/S, ras_axes) instead of its header, "
+                         "for images already resampled to 1 mm (minival v3)")
 
 if __name__ == '__main__':
     args = vars(parser.parse_args())

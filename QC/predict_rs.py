@@ -56,6 +56,7 @@ License.
 
 # python imports
 import os
+import csv
 import collections
 import multiprocessing
 import numpy as np
@@ -94,7 +95,8 @@ def predict_rs(path_images,
                recompute=True,
                verbose=True,
                prepared=None,
-               n_jobs=1):
+               n_jobs=1,
+               true_csv=None):
     """
     Predict the per-axis voxel spacing the content of a real image sits at.
 
@@ -117,7 +119,8 @@ def predict_rs(path_images,
     Default is False, i.e. the percentile predict_tm and SynthSeg deploy with; the min-max is what
     training ends on, so this flag measures that gap.
     :param pad_mode: (optional) what is done with an axis shorter than the window: 'constant' pads it with zeros
-    as predict.py does, 'edge' pads it with the outermost plane, and 'auto' pads it with zeros when it is at
+    as predict.py does, 'edge' pads it with the outermost plane, 'reflect' mirrors the volume about its outermost
+    plane, and 'auto' pads it with zeros when it is at
     most PAD_TOL short and otherwise cuts it down to a multiple of 2 ** n_levels (144 -> 128). Training never
     pads. Default is 'constant'. The csv
     gives how far each axis falls short of the window (pad_R/A/S), and valid = 0 when any axis falls short by
@@ -139,6 +142,10 @@ def predict_rs(path_images,
     resampling, which dominates the cost, is paid once per validation set and not once per checkpoint.
     :param n_jobs: (optional) worker processes for the preprocessing. 1 runs it in this process; None takes
     default_n_jobs(). Ignored when prepared is given. Default is 1.
+    :param true_csv: (optional) csv with the truth of each image (columns subject, true_R/A/S, ras_axes, as
+    predict_rs writes them), used instead of the image's header. For images already resampled to 1 mm, whose
+    header has lost the acquisition spacing (minival v3: minival v2 with a bias field, preprocessed). Every image
+    must have a row, matched by its stem. Default is None, the header.
     """
 
     # prepare input/output filepaths
@@ -147,13 +154,21 @@ def predict_rs(path_images,
         print('%s already exists and recompute is off, nothing to do' % path_out)
         return
 
+    # the truth from a csv instead of the header, checked before anything is built
+    truth = None
+    if true_csv is not None:
+        truth = read_truth(true_csv)
+        missing = [stem(p) for p in path_images if stem(p) not in truth]
+        assert not missing, '%d images without a row in %s, e.g. %s' % (len(missing), true_csv, missing[0])
+        print('truth from %s (%d rows), not from the headers' % (true_csv, len(truth)))
+
     # the grid the deficit is read against. None keeps each volume on its own grid, and then the
     # per-image spacing is what gets added back.
     atlas_res = None if target_res is None else \
         np.squeeze(utils.reformat_to_n_channels_array(target_res, 3)).astype('float')
 
     # write the csv header now, so a run that dies halfway still leaves a readable file. the true_*
-    # columns are always written: they come out of the header, which every image carries.
+    # columns are always written: they come out of the header, which every image carries, or out of true_csv.
     header = ['s_%s' % a for a in AXES] + ['true_%s' % a for a in AXES] + ['err_%s' % a for a in AXES]
     header += ['abs_err', 'ras_axes', 'pad_R', 'pad_A', 'pad_S', 'valid']
     write_csv(path_out, None, True, np.arange(len(header)), np.array(header), skip_first=False)
@@ -202,6 +217,8 @@ def predict_rs(path_images,
             # preprocessing. res_true is the header's spacing, permuted into the network's axis order and read
             # before the resampling.
             image, res_true, ras_axes, pad = next(volumes)
+            if truth is not None:
+                res_true, ras_axes = truth[stem(path_images[i])]
 
             # prediction. the net returns the deficit s - atlas_res, kept at or above 0 by the relu on the
             # last head conv; read it back as a spacing on the grid the image now sits on.
@@ -209,7 +226,7 @@ def predict_rs(path_images,
             s_pred = (atlas_res if atlas_res is not None else res_true) + deficit
             err = np.abs(s_pred - res_true)
 
-            row = [os.path.basename(path_images[i]).replace('.nii.gz', '').replace('.nii', '').replace('.mgz', '')]
+            row = [stem(path_images[i])]
             row += ['%.6f' % v for v in s_pred]
             row += ['%.6f' % v for v in res_true]
             row += ['%.6f' % v for v in err]
@@ -228,6 +245,18 @@ def predict_rs(path_images,
             pool.join()
 
     print('\nwrote %s' % path_out)
+
+
+def stem(path_image):
+    """The subject column of the csv: the file name without its extension."""
+    return os.path.basename(path_image).replace('.nii.gz', '').replace('.nii', '').replace('.mgz', '')
+
+
+def read_truth(true_csv):
+    """{stem: (res_true, ras_axes)} from a csv with the columns predict_rs writes (subject, true_R/A/S, ras_axes)."""
+    with open(true_csv, newline='') as f:
+        return {r['subject']: (np.array([float(r['true_%s' % a]) for a in AXES]), [int(c) for c in r['ras_axes']])
+                for r in csv.DictReader(f)}
 
 
 def window(cropping):
@@ -422,7 +451,7 @@ def preprocess(path_image, n_levels, target_res, crop=None, min_pad=None, minmax
     if pad_mode in ('constant', 'auto'):
         im = edit_volumes.pad_volume(im, padding_shape=pad_shape)
     else:
-        # same margins as pad_volume, filled with the outermost plane
+        # same margins as pad_volume, filled with the outermost plane (edge) or the mirrored volume (reflect)
         im = np.pad(im, [(p // 2, p - p // 2) for p in pad], mode=pad_mode)
 
     # add batch and channel axes

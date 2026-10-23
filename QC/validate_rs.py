@@ -74,7 +74,8 @@ def validate_training(image_dir,
                       recompute=False,
                       cache='auto',
                       ckpts=None,
-                      n_jobs=1):
+                      n_jobs=1,
+                      true_csv=None):
     """This function validates models saved at different epochs of the same training.
     All models are assumed to be in the same folder.
     The results of each model are saved in a subfolder in validation_main_dir.
@@ -107,7 +108,9 @@ def validate_training(image_dir,
     the job's memory budget, 'on' forces it, 'off' preprocesses again at every checkpoint. Default is 'auto'.
     :param ckpts: (optional) list of checkpoint paths to validate instead of every rs_*.h5 of models_dir, which
     is then ignored (and so is step_eval).
-    :param n_jobs: (optional) worker processes for the preprocessing, see predict_rs. Default is 1."""
+    :param n_jobs: (optional) worker processes for the preprocessing, see predict_rs. Default is 1.
+    :param true_csv: (optional) the truth of each image from a csv instead of its header, see predict_rs. For a set
+    already resampled to 1 mm (minival v3). Default is None, the headers."""
 
     # create result folder
     utils.mkdir(validation_main_dir)
@@ -158,7 +161,8 @@ def validate_training(image_dir,
                        recompute=True,
                        verbose=False,
                        prepared=prepared,
-                       n_jobs=n_jobs)
+                       n_jobs=n_jobs,
+                       true_csv=true_csv)
             # free the previous checkpoint's graph to avoid running out of GPU memory
             K.clear_session()
 
@@ -169,11 +173,13 @@ def read_scores(path_csv, column='abs_err', subjects=None):
     Every column the file holds is available by name: s_R/A/S the predicted spacings, true_R/A/S the
     header's, err_R/A/S the per-axis absolute errors, and abs_err their mean. ras_axes is the
     permutation predict_rs applied to that image's header; it is not numeric and asking for it raises.
-    Two derived columns are understood on top:
+    Three derived columns are understood on top:
 
       err_max    the largest of the three per-axis errors, i.e. the worst axis of that image
       err_worst  the error on the axis whose true spacing is coarsest, i.e. the axis a QC call is
                  usually about. Not the same as err_max, and the gap between the two is informative.
+      err_clip1  the mean over the three axes of |s - max(true, 1)|: the truth floored at 1 mm, the
+                 output a 1 mm-trained network can reach on sub-millimetre axes. The checkpoint rule.
 
     :param subjects: (optional) keep only these rows. Either a list of subject stems or a callable on
     the stem. This is how a resolution band is cut out of a set whose coarse images dominate the mean."""
@@ -205,6 +211,10 @@ def read_scores(path_csv, column='abs_err', subjects=None):
             j = int(np.argmax([float(r[k]) for k in true_cols]))
             out.append(float(r[err_cols[j]]))
         return np.array(out)
+    if column == 'err_clip1':
+        s_cols = ['s_%s' % a for a in AXES]
+        return np.array([np.mean([abs(float(r[s]) - max(float(r[t]), 1.)) for s, t in zip(s_cols, true_cols)])
+                         for r in rows if not blank(r, *(s_cols + true_cols))])
     return np.array([])
 
 

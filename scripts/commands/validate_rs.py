@@ -80,6 +80,9 @@ parser.add_argument("--n_jobs", type=int, dest="n_jobs", default=None,
                          "Default: the job's CPUs but one; 1 runs it in the main process")
 parser.add_argument("--ckpts", type=str, nargs='+', dest="ckpts", default=None,
                     help="checkpoint paths to validate instead of every rs_*.h5 of models_dir (then ignored)")
+parser.add_argument("--true_csv", type=str, dest="true_csv", default=None,
+                    help="csv with the truth of each image (subject, true_R/A/S, ras_axes) instead of its header, "
+                         "for a set already resampled to 1 mm (minival v3)")
 
 if __name__ == '__main__':
     args = vars(parser.parse_args())
