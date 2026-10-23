@@ -63,12 +63,11 @@ parser.add_argument('--synthseg_sampler', action='store_true', dest='synthseg_sa
 # target sits near 0.5. this target is >= 0 and is exactly 0 on a native volume, so relu fits it.
 parser.add_argument('--res_prob_min', type=float, dest='res_prob_min', default=0.2,
                     help='probability of drawing a native volume, i.e. 1 mm isotropic. Default 0.2.')
-# 'blur_only' drops the resampling grid entirely (only the Gaussian blur cue survives); 'kernel_phase' /
-# 'kernel_random' randomise the resample kernel and sub-voxel phase. default none = stock SynthSeg.
 parser.add_argument('--slice_profile', type=str, dest='slice_profile', default='gaussian',
-                    choices=['gaussian', 'box'],
+                    choices=['gaussian', 'box', 'gaussian_fwhm'],
                     help="slice profile kernel. 'box' averages over the slice thickness and drops the "
-                         "anti-aliasing, as a real contiguous acquisition does. default gaussian")
+                         "anti-aliasing, as a real contiguous acquisition does. 'gaussian_fwhm' is a gaussian of "
+                         "FWHM the thickness. default gaussian")
 parser.add_argument('--thickness_min_frac', type=float, dest='thickness_min_frac', default=0.,
                     help='lower bound of the slice thickness draw, as a fraction of the drawn spacing. '
                          '0 is the stock U(atlas_res, spacing), 0.7 the range a real gap leaves. default 0')

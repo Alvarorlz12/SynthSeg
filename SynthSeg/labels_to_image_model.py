@@ -140,7 +140,8 @@ def labels_to_image_model(labels_shape,
     randomise_res is True. 'gaussian' is the stock path, whose width doubles as the anti-aliasing
     filter for the downsampling. 'box' averages over the slice thickness instead, which is what a
     scanner measures, and applies no anti-aliasing, so the resampling aliases as a real acquisition
-    does. Default is 'gaussian'.
+    does. 'gaussian_fwhm' is a gaussian of FWHM the slice thickness, not capped at the resolution (the
+    stock 'gaussian' is 1.77 times wider). Default is 'gaussian'.
     :param thickness_min_frac: (optional) lower bound of the slice thickness draw, as a fraction of
     the sampled resolution, when randomise_res is True. 0 is the stock U(atlas_res, resolution); 1
     gives thickness = resolution, i.e. a contiguous acquisition. Default is 0.
@@ -194,7 +195,8 @@ def labels_to_image_model(labels_shape,
     the image and saturation and floor fractions stay absolute-scale landmarks.
     """
 
-    assert slice_profile in ('gaussian', 'box'), "slice_profile should be 'gaussian' or 'box'"
+    assert slice_profile in ('gaussian', 'box', 'gaussian_fwhm'), \
+        "slice_profile should be 'gaussian', 'box' or 'gaussian_fwhm'"
 
     # reformat resolutions
     labels_shape = utils.reformat_to_list(labels_shape)
@@ -293,6 +295,10 @@ def labels_to_image_model(labels_shape,
             if slice_profile == 'box':
                 width = l2i_et.box_width_for_downsampling(atlas_res, blur_res)
                 channel = layers.DynamicBoxBlur(max_res / np.array(atlas_res))([channel, width])
+            elif slice_profile == 'gaussian_fwhm':
+                # sigma is at most max_res / 2.3548, which sizes the kernel
+                sigma = l2i_et.fwhm_sigma_for_thickness(atlas_res, blur_res)
+                channel = layers.DynamicGaussianBlur(max_res / np.array(atlas_res) / 2.3548, 1.03)([channel, sigma])
             else:
                 sigma = l2i_et.blurring_sigma_for_downsampling(atlas_res, resolution, thickness=blur_res)
                 channel = layers.DynamicGaussianBlur(0.75 * max_res / np.array(atlas_res), 1.03)([channel, sigma])

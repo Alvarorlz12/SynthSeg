@@ -83,6 +83,21 @@ def blurring_sigma_for_downsampling(current_res, downsample_res, mult_coef=None,
     return sigma
 
 
+def fwhm_sigma_for_thickness(current_res, thickness):
+    """Compute standard deviations of 1d gaussian masks whose FWHM is the slice thickness, the usual definition
+    of MR slice thickness: sigma = thickness / (2 sqrt(2 ln 2)), in voxels of the current grid. Unlike
+    blurring_sigma_for_downsampling (0.75 * min(resolution, thickness), a FWHM of 1.77 times the thickness), the
+    width is not capped at the resolution.
+    :param current_res: resolution of the volume before downsampling. List or tensor.
+    :param thickness: slice thickness in each dimension, same type as current_res.
+    :return: standard deviation in voxels, given as the same type as thickness.
+    """
+    fwhm_to_sigma = 1. / (2. * np.sqrt(2. * np.log(2.)))
+    if not tf.is_tensor(thickness):
+        return fwhm_to_sigma * np.array(thickness) / np.array(current_res)
+    return KL.Lambda(lambda x: fwhm_to_sigma * x / tf.convert_to_tensor(current_res, dtype='float32'))(thickness)
+
+
 def box_width_for_downsampling(current_res, thickness):
     """Express a slice thickness in voxels of the current grid, which is the width of the box kernel
     that models the slice profile. Counterpart of blurring_sigma_for_downsampling for the box profile,

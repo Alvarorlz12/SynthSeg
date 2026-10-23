@@ -127,7 +127,8 @@ def training(labels_dir,
     :param slice_profile: (optional) shape of the kernel that models the slice profile. 'gaussian' is
     the stock path, whose width doubles as the anti-aliasing filter for the downsampling. 'box' averages
     over the slice thickness and applies no anti-aliasing, which is what a real contiguous acquisition
-    does, so the resampling aliases as a real scan does. Default is 'gaussian'.
+    does, so the resampling aliases as a real scan does. 'gaussian_fwhm' is a gaussian of FWHM the slice
+    thickness. Default is 'gaussian'.
     :param thickness_min_frac: (optional) lower bound of the slice thickness draw, as a fraction of the
     sampled resolution. 0 is the stock U(atlas_res, resolution); 0.7 covers the range a real gap leaves
     and drops the physically impossible thin slices; 1 forces a contiguous acquisition. Default is 0.
