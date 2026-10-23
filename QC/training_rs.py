@@ -83,6 +83,7 @@ def training(labels_dir,
              mask_edges_prob=0.,
              mask_edges_min=.02,
              mask_edges_max=.1,
+             final_crop=None,
              batchsize=1,
              output_shape=160,
              flipping=True,
@@ -138,6 +139,11 @@ def training(labels_dir,
     probability to mask_edges_prob. Default 0.02, i.e. 3 voxels at 160.
     :param mask_edges_max: (optional) largest width of each band, as a fraction of the axis; the width is
     drawn uniformly between the two on each side of each axis. Default 0.1, i.e. 16 voxels at 160.
+    :param final_crop: (optional) side of a centred cube cut out of the output_shape window at the end of the
+    generator, before the re-normalisation and MaskEdges, so the network trains on that cube. The window it is
+    cut from stays where the random crop put it in the label map, so the cube lands off the head centre by as
+    much as that crop moves, as a real field of view does. Deploy with predict_rs --cropping final_crop.
+    Must divide by 2 ** n_levels. Default None, i.e. the network sees the whole output_shape window.
     :param res_prob_min: (optional) probability of drawing the native resolution on every axis, i.e. of a
     1 mm isotropic volume. Default 0.2.
     :param synthseg_sampler: (optional) fall back to SynthSeg's own sampler, which either shares one
@@ -211,7 +217,7 @@ def training(labels_dir,
                                 slice_profile=slice_profile,
                                 thickness_min_frac=thickness_min_frac,
                                 mask_edges_prob=mask_edges_prob, mask_edges_min=mask_edges_min,
-                                mask_edges_max=mask_edges_max)
+                                mask_edges_max=mask_edges_max, final_crop=final_crop)
     image_shape = generator.outputs[0].get_shape().as_list()[1:]
 
     # target and prediction. k=3: one spacing per array axis.
@@ -236,6 +242,7 @@ def training(labels_dir,
              'synthseg' if synthseg_sampler else 'uniform-per-axis', bias_field_std))
     print('  mask_edges_prob %.2f  mask_edges_min %.3f  mask_edges_max %.3f'
           % (mask_edges_prob, mask_edges_min, mask_edges_max))
+    print('  output_shape %s  final_crop %s  network input %s' % (output_shape, final_crop, image_shape[:3]))
 
     # prefix 'rs' names the checkpoints rs_###.h5.
     train_model(regression_model, input_generator, lr, epochs, steps_per_epoch, model_dir, checkpoint,
@@ -248,7 +255,7 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
                     bias_field_std, bias_scale, gamma_std, clip, flipping=True,
                     res_uniform_per_axis=True, res_prob_min=0.2,
                     slice_profile='gaussian', thickness_min_frac=0., mask_edges_prob=0., mask_edges_min=.02,
-                    mask_edges_max=.1):
+                    mask_edges_max=.1, final_crop=None):
 
     # randomise_res=True is what draws the spacing, and return_resolution asserts it. return_bias_std is
     # pinned False so 'resolution' lands at outputs[2] rather than behind 'bias_field_std'.
@@ -277,7 +284,19 @@ def build_generator(labels_shape, atlas_res, generation_labels, output_shape, ou
         mx = K.max(x, axis=axes, keepdims=True)
         return (x - mn) / K.maximum(mx - mn, K.epsilon())
 
-    image = KL.Lambda(_minmax, name='rs_renorm')(gen.outputs[0])
+    image = gen.outputs[0]
+
+    # the centred cube of the window, cut before the re-normalisation so that, as in deployment, the divisor
+    # is read off what the network sees. crop_volume's centre: the start is int((n - c) / 2).
+    if final_crop is not None:
+        n = image.get_shape().as_list()[1:4]
+        assert all(final_crop <= s for s in n), 'final_crop %d larger than the window %s' % (final_crop, n)
+        assert final_crop % output_div_by_n == 0, 'final_crop %d does not divide by %d' % (final_crop, output_div_by_n)
+        lo = [int((s - final_crop) / 2) for s in n]
+        image = KL.Cropping3D(cropping=tuple((l, s - final_crop - l) for l, s in zip(lo, n)),
+                              name='rs_final_crop')(image)
+
+    image = KL.Lambda(_minmax, name='rs_renorm')(image)
 
     # bands of exact zeros at the edges, the field of view a real scan lacks once padded to the window.
     # after the re-normalisation, as in deployment, where the padding comes after the normalisation.

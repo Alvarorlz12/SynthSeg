@@ -79,6 +79,10 @@ parser.add_argument('--mask_edges_min', type=float, dest='mask_edges_min', defau
                     help='smallest width of each band as a fraction of the axis. default 0.02')
 parser.add_argument('--mask_edges_max', type=float, dest='mask_edges_max', default=.1,
                     help='largest width of each band as a fraction of the axis. default 0.1')
+parser.add_argument('--final_crop', type=int, dest='final_crop', default=None,
+                    help='side of the centred cube of the output_shape window the network trains on, cut at the '
+                         'end of the generator; deploy with predict_rs --cropping of the same size. default None, '
+                         'the whole window')
 parser.add_argument('--no_deform', action='store_true', dest='no_deform')
 parser.add_argument('--bias_std', type=float, dest='bias_field_std', default=0.)
 parser.add_argument('--bias_scale', type=float, dest='bias_scale', default=.025)
